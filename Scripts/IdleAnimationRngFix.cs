@@ -1,0 +1,112 @@
+// Idle-animation RNG fix -- the Animation3 flapper class, root-caused at last (three-machine capture
+// 0.8.10, Codex-identified; every claim re-verified in the decompile before building).
+//
+// AnimationManager.StatefulRandom (AnimationManager.cs:32) maps to PFStatefulRandom.Visuals.Animation3 --
+// which IS in the serialized/HASHED randomState set. Unit idle variety draws it on the view/animation
+// clock: micro-idle triggers, variant-idle rerolls, idle speed jitter. Idle timing is inherently
+// client-local (who is on-screen, animator update cadence), so two machines draw the SAME values a few
+// ticks apart -- transient randState skew that re-converges (the classic "Animation3 flapper" behind most
+// transition-window desync noise since the campaign began) and, when draws recur while skewed (capture
+// 0.8.10: P3 drew 34A6B1A7 @1662981, host/P2 @1662994), escalates to a SERIOUS desync with every other
+// stream and entity hash agreeing.
+//
+// The engine itself says idle RNG should not be hashed: PFStatefulRandom.Visuals.AnimationIdle exists and
+// is EXPLICITLY excluded from the serialized set (PFStatefulRandom.cs:97) -- the designated non-hashed
+// idle stream. The idle call graph just uses the wrong property.
+//
+// FIX: in multiplayer, reroute ONLY the idle call graph to AnimationIdle -- a transpiler on the four idle
+// sites swaps the get_StatefulRandom call for a helper (solo: the real property, vanilla byte-identical;
+// MP: AnimationIdle). Idle variety is preserved (real RNG, per-machine -- it is pure view), and the hashed
+// Animation3 stream simply stops moving on the idle path, killing the flapper class at the source.
+//
+//   1. UnitAnimationManager.TickIdleVariants  (draws :819/:824/:827/:853/:858 -- triggers + speed jitter)
+//   2. UnitAnimationManager.OnAnimationSetChanged (:1071 -- retrigger tracker rebuild)
+//   3. UnitAnimationActionMicroIdle.OnStart   (:45 -- variant pick)
+//   4. UnitAnimationActionVariantIdle.OnStart (:42/:50/:98/:107 -- override chances + variant pick)
+//
+// Deliberately NOT touched (Codex caution, verified they share the same property): UnitAnimationActionDodge
+// (:103) and UnitAnimationActionSpecialAttack (:180) -- combat animation-variant picks that may deserve the
+// same treatment but need their own audit (they fire inside synced combat execution, where the hashed draw
+// is symmetric and harmless unless proven otherwise). Do not widen this patch to them without a capture.
+//
+// Both-required: a modded-vs-vanilla pair would advance Animation3 on one machine only -- permanent skew,
+// worse than the transient vanilla flapper. Standard manual mod-parity applies. Fail-open per site: pattern
+// not found -> original IL unchanged + loud log.
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
+using HarmonyLib;
+using Kingmaker.Networking;
+using Kingmaker.Utility.Random;
+using Kingmaker.Utility.StatefulRandom;
+using Kingmaker.Visual.Animation;
+using Kingmaker.Visual.Animation.Kingmaker;
+using Kingmaker.Visual.Animation.Kingmaker.Actions;
+
+namespace MultiplayerStability
+{
+    [HarmonyPatch]
+    internal static class IdleAnimationRngFix
+    {
+        private static IEnumerable<MethodBase> TargetMethods()
+        {
+            // EXPLICIT signatures on every target (the 0.8.11 incident): OnStart is AMBIGUOUS by name --
+            // the actions inherit base OnStart(AnimationActionHandle) alongside their own
+            // OnStart(UnitAnimationActionHandle) -- so a name-only lookup threw AmbiguousMatchException on
+            // every machine and, before the 0.8.12 per-class init isolation, aborted the blanket PatchAll
+            // with the transfer stack still unwired (saves silently fell back to vanilla 0.22 MB/s).
+            var labels = new[]
+            {
+                "UnitAnimationManager.TickIdleVariants(float)",
+                "UnitAnimationManager.OnAnimationSetChanged()",
+                "UnitAnimationActionMicroIdle.OnStart(UnitAnimationActionHandle)",
+                "UnitAnimationActionVariantIdle.OnStart(UnitAnimationActionHandle)",
+            };
+            var sites = new[]
+            {
+                AccessTools.Method(typeof(UnitAnimationManager), "TickIdleVariants", new[] { typeof(float) }),
+                AccessTools.Method(typeof(UnitAnimationManager), "OnAnimationSetChanged", Type.EmptyTypes),
+                AccessTools.Method(typeof(UnitAnimationActionMicroIdle), "OnStart", new[] { typeof(UnitAnimationActionHandle) }),
+                AccessTools.Method(typeof(UnitAnimationActionVariantIdle), "OnStart", new[] { typeof(UnitAnimationActionHandle) }),
+            };
+            for (int i = 0; i < sites.Length; i++)
+            {
+                if (sites[i] != null)
+                    yield return sites[i];
+                else
+                    MultiplayerStabilityMain.Log("[IdleRng][ERR] " + labels[i] + " not found -- site unpatched.");
+            }
+        }
+
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+        {
+            var replacement = AccessTools.Method(typeof(IdleAnimationRngFix), nameof(IdleRng));
+            int swapped = 0;
+            foreach (var ci in instructions)
+            {
+                if ((ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call)
+                    && ci.operand is MethodInfo mi && mi.Name == "get_StatefulRandom"
+                    && mi.DeclaringType == typeof(AnimationManager))
+                {
+                    // Same stack transition: consumes the AnimationManager ref, pushes StatefulRandom.
+                    yield return new CodeInstruction(OpCodes.Call, replacement) { labels = ci.labels, blocks = ci.blocks };
+                    swapped++;
+                    continue;
+                }
+                yield return ci;
+            }
+            MultiplayerStabilityMain.Log("[IdleRng] " + original.DeclaringType?.Name + "." + original.Name
+                + ": " + swapped + " idle draw(s) rerouted off the hashed Animation3 stream in multiplayer"
+                + (swapped == 0 ? " -- PATTERN NOT FOUND, vanilla behaviour in effect" : "") + ".");
+        }
+
+        // MP: the engine's own designated NON-hashed idle stream (excluded from the serialized set) --
+        // idle variety stays random, the hashed stream stays untouched. Solo: the real property, vanilla
+        // exactly (including its doll-room switch).
+        public static StatefulRandom IdleRng(AnimationManager manager)
+        {
+            return NetworkingManager.IsMultiplayer ? PFStatefulRandom.Visuals.AnimationIdle : manager.StatefulRandom;
+        }
+    }
+}

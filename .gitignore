@@ -1,0 +1,19 @@
+# Build artifacts (the Unity template builds outside this tree, but guard anyway)
+bin/
+obj/
+*.dll
+*.pdb
+
+# Editor/user state
+*.user
+*.csproj
+*.sln
+
+# Never commit player logs or captures (may contain account identifiers)
+*.log
+GameLogFull*.txt
+captures/
+logs/
+Mod Build Logs*/
+*.zip
+*.7z
