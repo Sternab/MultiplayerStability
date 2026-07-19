@@ -81,7 +81,9 @@
 //  18. ACTION-BAR ROLE SPAM FIX (ActionBarRoleSpamFix.cs) -- on player-leave, the engine raises a role
 //      event per controlled entity (~1,500) and every action-bar slot refreshes on ALL of them, NRE-ing on
 //      unitless slots: ~18,000 exception stacks in seconds, unbounded GameLogFull growth (600 MB tester
-//      logs). Prefix filters each slot to its OWN unit's events and skips unitless slots. UI-only.
+//      logs). Prefix filters each slot to its OWN unit's events and skips unitless slots. v0.8.16 extends
+//      the unitless skip to the per-player room events (HandlePlayerEnteredRoom/LeftRoom -- the residual
+//      425-stack storm in the 0.8.14 capture). UI-only.
 //      (Batch context: FogGateFix gained three sites -- movement 8x, awareness rolls, ricochet candidates --
 //      and DeterministicSleep gained the combat-capable census rule, the corpse reveal-flag re-assert, and
 //      the EntityFader wake-cancel. Channel-B audit, 2026-07-09.)

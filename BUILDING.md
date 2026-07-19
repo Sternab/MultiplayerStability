@@ -16,6 +16,12 @@
    - launch and confirm `[MPStability] [Init] Patches applied (N classes)` with no `FAILED`, plus the
      per-component arming lines (`[FogGate] ... site(s)`, `[TimeScaleFix]`, `[IdleRng]` ×4, etc.).
 
+## Known packaging nuance
+The deployed package must contain a `Blueprints` directory (even empty) — the OwlcatModification loader
+logs a startup exception when it is missing. The source tree tracks `Blueprints/README.txt` for this reason;
+if a build/deploy drops empty directories, recreate `Modifications\MultiplayerStability\Blueprints` in the
+deployed folder.
+
 ## Release discipline
 - Bump `Version` in `MultiplayerStability.asset` for every behavior change (review history stays unambiguous).
 - Every simulation-changing release must ship to **all** peers together (see `COMPATIBILITY.md`).

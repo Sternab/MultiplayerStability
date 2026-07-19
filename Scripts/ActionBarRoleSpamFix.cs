@@ -19,6 +19,8 @@
 // global exception suppressor -- real exceptions elsewhere keep their full context (Codex's line, agreed).
 // Role events only exist in multiplayer, but the prefix defers to vanilla outside MP anyway; fail-open.
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
 using Kingmaker.Code.UI.MVVM.VM.ActionBar;
 using Kingmaker.Networking;
@@ -50,6 +52,55 @@ namespace MultiplayerStability
                     MultiplayerStabilityMain.Log("[ActionBarFix] Active -- action-bar slots refresh only on their own unit's role events.");
                 }
                 return true;                                         // our unit's role changed: vanilla refresh
+            }
+            catch (Exception)
+            {
+                return true;                                         // fail-open: vanilla behaviour
+            }
+        }
+    }
+
+    // Second half (v0.8.16, from the 0.8.14 three-player capture: 425 residual exception stacks during
+    // room departure/re-entry): HandlePlayerEnteredRoom and HandlePlayerLeftRoom do the SAME unconditional
+    // slot refresh and NRE the same way on unitless slots. These are per-player events (once per join/
+    // leave, not per-entity -- hence the smaller storm), and a player change legitimately affects every
+    // slot's net-role availability, so no entity filter applies here -- only the unitless skip.
+    // Targets resolved by explicit name + single-Player-parameter match (the 0.8.13 lesson: never
+    // name-only lookups) without needing a compile-time Photon.Realtime reference.
+    [HarmonyPatch]
+    internal static class ActionBarSlotVM_RoomEvents_NoSpam_Patch
+    {
+        private static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var name in new[] { "HandlePlayerEnteredRoom", "HandlePlayerLeftRoom" })
+            {
+                MethodBase found = null;
+                foreach (var m in AccessTools.GetDeclaredMethods(typeof(ActionBarSlotVM)))
+                {
+                    if (m.Name == name && m.GetParameters().Length == 1
+                        && m.GetParameters()[0].ParameterType.Name == "Player")
+                    {
+                        found = m;
+                        break;
+                    }
+                }
+                if (found != null)
+                    yield return found;
+                else
+                    MultiplayerStabilityMain.Log("[ActionBarFix][ERR] ActionBarSlotVM." + name + "(Player) not found -- room-event path unguarded.");
+            }
+        }
+
+        private static bool Prefix(ActionBarSlotVM __instance)
+        {
+            try
+            {
+                if (!NetworkingManager.IsMultiplayer)
+                    return true;
+                var slot = __instance.MechanicActionBarSlot;
+                if (slot == null || slot.Unit == null)
+                    return false;                                    // unitless slot: refresh would NRE -- skip
+                return true;                                         // real slot: vanilla refresh
             }
             catch (Exception)
             {

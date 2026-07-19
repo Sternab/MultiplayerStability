@@ -3,6 +3,13 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
+## 0.8.16
+- Action-bar spam fix extended to the per-player room events (`HandlePlayerEnteredRoom`/`LeftRoom`) — the
+  residual ~425-exception storm on host disconnect in the 0.8.14 three-player capture.
+- Same capture archived as the reference *clean* three-player session: full mod parity, zero desyncs, both
+  accelerated transfers succeeded (including a reconnect transfer delivered and accepted by the game); the
+  session ended on a host-side Photon `ClientTimeout` — infrastructure, not simulation.
+
 ## 0.8.15 — hardening review round (current)
 - Withdrew two overconfident mechanisms after external review: the camera-frustum substitution in the AI
   turn-speed fix (frustum tests local renderer bounds — a proxy, not deterministic; MP is now always-1×) and
