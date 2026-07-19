@@ -85,7 +85,8 @@
 //      the unitless skip to the per-player room events (HandlePlayerEnteredRoom/LeftRoom -- ~155 of the
 //      425 residual stacks in the 0.8.14 capture); v0.8.17 removes the IsMultiplayer gate from BOTH guards
 //      (instantaneous PlayerCount>1 goes false BEFORE 2->1 departure callbacks -- the other ~270 stacks;
-//      the events are net-originated by construction, so the gate protected nothing). UI-only, ungated.
+//      ungated because the filtering invariant is valid in every context, including teardown and the rare
+//      non-departure raisers -- no player-count test is required). UI-only.
 //      (Batch context: FogGateFix gained three sites -- movement 8x, awareness rolls, ricochet candidates --
 //      and DeterministicSleep gained the combat-capable census rule, the corpse reveal-flag re-assert, and
 //      the EntityFader wake-cancel. Channel-B audit, 2026-07-09.)

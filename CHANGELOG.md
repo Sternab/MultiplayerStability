@@ -8,7 +8,8 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
   stacks: the per-player room events (`HandlePlayerEnteredRoom`/`LeftRoom`) gained the unitless-slot guard
   (~155 stacks), and the `IsMultiplayer` gate was removed from both guards — instantaneous `PlayerCount > 1`
   goes false *before* 2→1 departure callbacks, so the gate had been disabling the guard during the storm's
-  biggest window (~270 stacks). The events are net-originated by construction; the gate protected nothing.
+  biggest window (~270 stacks). Ungated because the filtering invariant is valid in every context —
+  including teardown and rare non-departure raisers — so no player-count test is required.
 - Same capture archived as the reference *clean* three-player session: full mod parity, zero desyncs, both
   accelerated transfers succeeded (including a reconnect transfer delivered and accepted by the game); the
   session ended on a host-side Photon `ClientTimeout` — infrastructure, not simulation.

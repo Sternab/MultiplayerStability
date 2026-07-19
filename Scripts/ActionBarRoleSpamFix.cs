@@ -17,7 +17,11 @@
 //      slot still refreshes when ITS unit's role actually changes, which is the handler's purpose).
 // Vanilla behaviour is preserved exactly for the one event that matters to each slot. Deliberately NOT a
 // global exception suppressor -- real exceptions elsewhere keep their full context (Codex's line, agreed).
-// Role events only exist in multiplayer, but the prefix defers to vanilla outside MP anyway; fail-open.
+// UNGATED (no IsMultiplayer check): the filtering invariant is valid in EVERY context, including teardown
+// and the rare non-departure raisers (the net_allow_one cheat raises the room callbacks; PlayerRole.ForceSet
+// raises HandleRoleSet) -- an unrelated entity's role event cannot affect a slot, and a unitless slot has no
+// valid refresh work. No instantaneous player-count test is required or wanted (the v0.8.16 gate disabled
+// the guard during 2->1 departures, the storm's biggest window). Fail-open.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -35,11 +39,12 @@ namespace MultiplayerStability
         {
             try
             {
-                // Deliberately NO IsMultiplayer gate (v0.8.17): these events are net-originated by
-                // construction (PlayerRole role events / Photon room callbacks never fire solo), so a gate
-                // protects nothing -- and the instantaneous PlayerCount>1 check actively DISABLED the guard
-                // during 2->1 departures (Owlcat removes the departing player BEFORE raising the callbacks),
-                // which was the captured storm's biggest window (~270 of 425 stacks; Codex catch).
+                // Deliberately NO IsMultiplayer gate (v0.8.17): the filtering invariant below is valid in
+                // every context -- an unrelated entity's role event cannot change this slot's state, no
+                // matter who raised it (departure teardown, PlayerRole.ForceSet, cheats). The instantaneous
+                // PlayerCount>1 check actively DISABLED the guard during 2->1 departures (Owlcat removes
+                // the departing player BEFORE raising the callbacks) -- the captured storm's biggest window
+                // (~270 of 425 stacks; Codex catch).
                 var slot = __instance.MechanicActionBarSlot;
                 var unit = slot != null ? slot.Unit : null;
                 if (unit == null)
@@ -97,8 +102,9 @@ namespace MultiplayerStability
         {
             try
             {
-                // No IsMultiplayer gate -- same reasoning as the role-event guard above (net-originated
-                // events; the instantaneous gate opted out exactly during 2->1 departures).
+                // No IsMultiplayer gate -- same reasoning as the role-event guard above: skipping a
+                // unitless slot's refresh is valid in every context (there is no valid work to do), and
+                // the instantaneous gate opted out exactly during 2->1 departures.
                 var slot = __instance.MechanicActionBarSlot;
                 if (slot == null || slot.Unit == null)
                     return false;                                    // unitless slot: refresh would NRE -- skip
