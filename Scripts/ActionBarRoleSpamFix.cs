@@ -23,7 +23,6 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using Kingmaker.Code.UI.MVVM.VM.ActionBar;
-using Kingmaker.Networking;
 
 namespace MultiplayerStability
 {
@@ -36,8 +35,11 @@ namespace MultiplayerStability
         {
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
-                    return true;                                     // solo: vanilla (events never fire anyway)
+                // Deliberately NO IsMultiplayer gate (v0.8.17): these events are net-originated by
+                // construction (PlayerRole role events / Photon room callbacks never fire solo), so a gate
+                // protects nothing -- and the instantaneous PlayerCount>1 check actively DISABLED the guard
+                // during 2->1 departures (Owlcat removes the departing player BEFORE raising the callbacks),
+                // which was the captured storm's biggest window (~270 of 425 stacks; Codex catch).
                 var slot = __instance.MechanicActionBarSlot;
                 var unit = slot != null ? slot.Unit : null;
                 if (unit == null)
@@ -95,8 +97,8 @@ namespace MultiplayerStability
         {
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
-                    return true;
+                // No IsMultiplayer gate -- same reasoning as the role-event guard above (net-originated
+                // events; the instantaneous gate opted out exactly during 2->1 departures).
                 var slot = __instance.MechanicActionBarSlot;
                 if (slot == null || slot.Unit == null)
                     return false;                                    // unitless slot: refresh would NRE -- skip
