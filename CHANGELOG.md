@@ -3,6 +3,15 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
+## 0.8.18
+- Log-only diagnostic for a newly captured desync class: the combat-exit weather path (visual
+  `IsProfileOverriden` flag steering hashed-Weather draws into hashed player fields). Instruments the
+  predicates and draw sites so the next capture names the differing input; deliberately not a fix yet.
+- Field validation recorded from the same capture: the action-bar teardown guard held (zero exceptions on a
+  2→1 departure), ghost protections contained a large preview build, the transition-flap policy correctly
+  did NOT suppress the real fork, and a Photon `ServerTimeout` transfer retry recovered cleanly (15.4 MB
+  delivered and accepted).
+
 ## 0.8.16–0.8.17
 - Action-bar spam fix completed in two review rounds against the 0.8.14 capture's 425 residual exception
   stacks: the per-player room events (`HandlePlayerEnteredRoom`/`LeftRoom`) gained the unitless-slot guard

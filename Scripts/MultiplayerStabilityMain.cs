@@ -87,6 +87,12 @@
 //      (instantaneous PlayerCount>1 goes false BEFORE 2->1 departure callbacks -- the other ~270 stacks;
 //      ungated because the filtering invariant is valid in every context, including teardown and the rare
 //      non-departure raisers -- no player-count test is required). UI-only.
+//  19. WEATHER COMBAT-EXIT DIAGNOSTIC (WeatherCombatExitDiag.cs) -- log-only instrumentation for the
+//      second weather determinism bug (combat-exit inclemency path draws hashed Weather + writes hashed
+//      player fields, steered by the VISUAL IsProfileOverriden flag; capture 0.8.17-SECOND). Logs every
+//      HandlePartyCombatStateChanged with its predicates + SetNewInclemency draw with pre/post stream
+//      fingerprints; the next two-sided capture names the differing predicate. NOT a fix (a
+//      DisableStatefulRandomContext wrap would write client-random values into hashed fields -- worse).
 //      (Batch context: FogGateFix gained three sites -- movement 8x, awareness rolls, ricochet candidates --
 //      and DeterministicSleep gained the combat-capable census rule, the corpse reveal-flag re-assert, and
 //      the EntityFader wake-cancel. Channel-B audit, 2026-07-09.)
