@@ -3,10 +3,15 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.18
+## 0.8.18–0.8.19
 - Log-only diagnostic for a newly captured desync class: the combat-exit weather path (visual
-  `IsProfileOverriden` flag steering hashed-Weather draws into hashed player fields). Instruments the
-  predicates and draw sites so the next capture names the differing input; deliberately not a fix yet.
+  `IsProfileOverriden` flag steering hashed-Weather draws into hashed player fields). Logs the full gating
+  input set — both controllers' `TargetInclemency`, veil counter, profile-override flag, `CurrentWeatherEffect`
+  — plus each `SetNewInclemency` call with weather-vs-wind attribution and its bracketing pre→post stream
+  fingerprints, so the next two-sided capture names the differing predicate. Deliberately not a fix yet.
+- 0.8.19 review round: `CurrentWeatherEffect` is a public field (the property lookup silently nulled), the
+  two `TargetInclemency` gates were unlogged, and draw-site calls were unattributed — all corrected before
+  first distribution; 0.8.18 never shipped.
 - Field validation recorded from the same capture: the action-bar teardown guard held (zero exceptions on a
   2→1 departure), ghost protections contained a large preview build, the transition-flap policy correctly
   did NOT suppress the real fork, and a Photon `ServerTimeout` transfer retry recovered cleanly (15.4 MB
