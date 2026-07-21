@@ -27,11 +27,17 @@
 // instrumented yet -- scope stays on the proven site.
 //
 // IK objects' types live outside the template reference assemblies -- read reflectively (null-checks only).
-// Log-only -> subset-safe; MP-gated; paused-context breadcrumbs capped per session, exceptions always logged.
+// Log-only -> subset-safe; MP-gated. Breadcrumbs: the FIRST 80 paused-window calls of each pause episode
+// (episode = an actual GameModeType.Pause StartMode transition, with tick-regression as the save/reload
+// fallback); exceptions are always logged regardless of the budget. Every line carries a per-(tick, unit)
+// invocation ordinal (seq) because one unit can run multiple commands in a single simulation tick -- the
+// two-sided comparison must treat records as ordered multisets keyed (tick, unit, seq), or an upstream
+// call-count divergence would masquerade as throw-versus-success.
 using System;
 using System.Reflection;
 using HarmonyLib;
 using Kingmaker;
+using Kingmaker.GameModes;
 using Kingmaker.Mechanics.Entities;
 using Kingmaker.Networking;
 
@@ -40,30 +46,46 @@ namespace MultiplayerStability
     [HarmonyPatch(typeof(AbstractUnitEntity), nameof(AbstractUnitEntity.ForceRotateToDesired))]
     internal static class ForceRotateToDesired_Diag_Patch
     {
-        // Budget is per pause EPISODE (a gap of >100 ticks / ~5s with no paused rotate calls starts a new
-        // episode and resets the counter): a session-lifetime cap would exhaust on earlier storms and erase
-        // the successful peer's comparison evidence for the decisive episode (Codex round 24 -- the 0.8.19
-        // host had 57 throwing calls before its first trap).
-        private const int BreadcrumbCapPerEpisode = 80;
-        private const int EpisodeGapTicks = 100;
-        private static int s_breadcrumbs;
-        private static int s_lastPausedCallTick = int.MinValue / 2;
+        // Budget is per pause EPISODE: a session-lifetime cap would exhaust on earlier storms and erase the
+        // successful peer's comparison evidence for the decisive episode (Codex round 24 -- the 0.8.19 host
+        // had 57 throwing calls before its first trap). The episode boundary is EXACT (Codex round 25): the
+        // budget resets on the real GameModeType.Pause StartMode transition (patch below), so dense
+        // back-to-back traps each get a fresh budget; tick < lastTick (save/reload regression) is the
+        // fallback reset.
+        internal const int BreadcrumbCapPerEpisode = 80;
+        internal static int s_breadcrumbs;
+        private static int s_lastTick = int.MinValue / 2;
+        private static string s_lastUnit;
+        private static int s_seq;
 
-        private static void Prefix(AbstractUnitEntity __instance)
+        // Per-(tick, unit) invocation ordinal: one unit can run several commands in one simulation tick, so
+        // (tick, unit) alone is not a unique key. Computed in the prefix, carried to the finalizer via
+        // __state so the breadcrumb and any [EXC] line for the same invocation share the same seq.
+        private static void Prefix(AbstractUnitEntity __instance, out int __state)
         {
+            __state = -1;
             try
             {
-                if (!NetworkingManager.IsMultiplayer || !Game.Instance.IsPaused)
-                    return;                                     // only the paused window is the suspect class
+                if (!NetworkingManager.IsMultiplayer)
+                    return;
                 int tick = Game.Instance.RealTimeController.CurrentNetworkTick;
-                if (tick - s_lastPausedCallTick > EpisodeGapTicks)
-                    s_breadcrumbs = 0;                          // new pause episode: fresh budget
-                s_lastPausedCallTick = tick;
+                if (tick < s_lastTick)
+                    s_breadcrumbs = 0;                          // tick regression (save/reload): fallback reset
+                string unit = SafeName(__instance);
+                if (tick == s_lastTick && unit == s_lastUnit)
+                    s_seq++;
+                else
+                    s_seq = 0;
+                s_lastTick = tick;
+                s_lastUnit = unit;
+                __state = s_seq;
+                if (!Game.Instance.IsPaused)
+                    return;                                     // only the paused window is the suspect class
                 if (s_breadcrumbs >= BreadcrumbCapPerEpisode)
                     return;
                 s_breadcrumbs++;
-                MultiplayerStabilityMain.Log("[TrapDiag] ForceRotateToDesired(paused) unit=" + SafeName(__instance)
-                    + " tick=" + tick
+                MultiplayerStabilityMain.Log("[TrapDiag] ForceRotateToDesired(paused) unit=" + unit
+                    + " tick=" + tick + " seq=" + s_seq
                     + " view=" + (__instance.View != null)
                     + (__instance.View != null
                         ? " visible=" + __instance.View.IsVisible
@@ -79,7 +101,7 @@ namespace MultiplayerStability
         }
 
         // Exceptions are the divergence event itself -- always logged, ALWAYS rethrown unchanged.
-        private static Exception Finalizer(AbstractUnitEntity __instance, Exception __exception)
+        private static Exception Finalizer(AbstractUnitEntity __instance, int __state, Exception __exception)
         {
             try
             {
@@ -87,7 +109,7 @@ namespace MultiplayerStability
                 {
                     MultiplayerStabilityMain.Log("[TrapDiag][EXC] ForceRotateToDesired threw AFTER the sim orientation write: unit="
                         + SafeName(__instance)
-                        + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
+                        + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick + " seq=" + __state
                         + " paused=" + Game.Instance.IsPaused
                         + " view=" + (__instance.View != null)
                         + (__instance.View != null
@@ -113,6 +135,25 @@ namespace MultiplayerStability
             catch (Exception)
             {
                 return "?";
+            }
+        }
+
+        // Exact episode boundary: the budget resets when the Pause game mode actually STARTS -- dense
+        // back-to-back trap pauses each get a fresh budget (the 5s-gap heuristic could not separate them,
+        // and a save/reload tick regression made the gap negative and never reset; Codex round 25).
+        [HarmonyPatch(typeof(Game), nameof(Game.StartMode), typeof(GameModeType))]
+        internal static class PauseEpisode_Reset_Patch
+        {
+            private static void Prefix(GameModeType type)
+            {
+                try
+                {
+                    if (type == GameModeType.Pause)
+                        s_breadcrumbs = 0;
+                }
+                catch (Exception)
+                {
+                }
             }
         }
 

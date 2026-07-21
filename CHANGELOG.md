@@ -3,7 +3,7 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.20–0.8.21
+## 0.8.20–0.8.22
 - Dialogue guard C: the third convicted view-time dialogue caller (`HasNextUnselectedAnswers`, the answer
   tree inspection behind the Solomorne-dialogue fork) now holds the RNG-divert context in MP — the same
   semantic caller-wrap shape as the preview getters; the proactive LeakDetector caught these draws before
@@ -16,6 +16,11 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
   the successful peer's comparison evidence — both 0.8.19 peers threw, so the decisive diff is keyed
   `(networkTick, unit)` sets, throw-vs-success at matching keys, not mere exception presence), and
   `ViewTransform` nullity added to the state dumps (it is dereferenced before the IK chain).
+- 0.8.22 review round: the episode boundary is now exact — the breadcrumb budget resets on the real
+  `GameModeType.Pause` `StartMode` transition (dense back-to-back traps each get a fresh budget) with
+  tick-regression as the save/reload fallback; and every line carries a per-`(tick, unit)` invocation
+  ordinal (`seq`, prefix→finalizer via `__state`) so the two-sided comparison is an ordered multiset and
+  upstream call-count divergence cannot masquerade as throw-versus-success.
 
 ## 0.8.18–0.8.19
 - Log-only diagnostic for a newly captured desync class: the combat-exit weather path (visual
