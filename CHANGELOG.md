@@ -3,7 +3,7 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.20
+## 0.8.20–0.8.21
 - Dialogue guard C: the third convicted view-time dialogue caller (`HasNextUnselectedAnswers`, the answer
   tree inspection behind the Solomorne-dialogue fork) now holds the RNG-divert context in MP — the same
   semantic caller-wrap shape as the preview getters; the proactive LeakDetector caught these draws before
@@ -12,6 +12,10 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
   then touch client-local view/IK state; a one-machine exception there skips command bookkeeping and forks
   `sceneEntities` (party members only, RNG identical — a longstanding vanilla defect also visible in 0.6.4
   logs). Instruments the paused window and all exceptions; containment follows the evidence.
+- 0.8.21 review round: breadcrumb budget made per-pause-episode (a session-lifetime cap would have erased
+  the successful peer's comparison evidence — both 0.8.19 peers threw, so the decisive diff is keyed
+  `(networkTick, unit)` sets, throw-vs-success at matching keys, not mere exception presence), and
+  `ViewTransform` nullity added to the state dumps (it is dereferenced before the IK chain).
 
 ## 0.8.18–0.8.19
 - Log-only diagnostic for a newly captured desync class: the combat-exit weather path (visual
@@ -38,7 +42,7 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
   accelerated transfers succeeded (including a reconnect transfer delivered and accepted by the game); the
   session ended on a host-side Photon `ClientTimeout` — infrastructure, not simulation.
 
-## 0.8.15 — hardening review round (current)
+## 0.8.15 — hardening review round
 - Withdrew two overconfident mechanisms after external review: the camera-frustum substitution in the AI
   turn-speed fix (frustum tests local renderer bounds — a proxy, not deterministic; MP is now always-1×) and
   the global deterministic dialogue-cue replacement (it changed real narrative selection; the semantic

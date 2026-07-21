@@ -14,11 +14,17 @@
 //
 // This diagnostic does NOT change behavior (exceptions are logged and rethrown unchanged). It exists to
 // give the next capture per-machine evidence of WHERE the asymmetry enters: every ForceRotateToDesired
-// call while paused logs the unit + view/visibility/IK state; every exception logs full context. The
-// containment fix (guarding the view tail so bookkeeping completes) comes AFTER this evidence, as its own
-// reviewed change. Candidate sibling seams (movement startup, UnitFollowUnitController.ShouldAct's
-// View.MovementAgent.WantsToMove read) are deliberately not instrumented yet -- scope stays on the proven
-// site.
+// call while paused logs the unit + view/visibility/transform/IK state; every exception logs full context.
+// ACCEPTANCE CRITERION for the two-sided diff (Codex round 24 -- both 0.8.19 peers threw; mere presence of
+// [EXC] lines proves nothing): key every line by (networkTick, UniqueId) and compare the KEYED SETS across
+// peers -- the decisive result is a key that THREW on one peer while the same key logged a successful
+// breadcrumb (or state difference) on the other. That is why successful-call breadcrumbs are first-class
+// evidence and the budget is per pause EPISODE, not per session: a session-lifetime cap exhausted before
+// the decisive window would erase the successful peer's counterpart, making "succeeded" indistinguishable
+// from "never called." The containment fix (guarding the view tail so bookkeeping completes) comes AFTER
+// this evidence, as its own reviewed change. Candidate sibling seams (movement startup,
+// UnitFollowUnitController.ShouldAct's View.MovementAgent.WantsToMove read) are deliberately not
+// instrumented yet -- scope stays on the proven site.
 //
 // IK objects' types live outside the template reference assemblies -- read reflectively (null-checks only).
 // Log-only -> subset-safe; MP-gated; paused-context breadcrumbs capped per session, exceptions always logged.
@@ -34,8 +40,14 @@ namespace MultiplayerStability
     [HarmonyPatch(typeof(AbstractUnitEntity), nameof(AbstractUnitEntity.ForceRotateToDesired))]
     internal static class ForceRotateToDesired_Diag_Patch
     {
-        private const int BreadcrumbCap = 80;
+        // Budget is per pause EPISODE (a gap of >100 ticks / ~5s with no paused rotate calls starts a new
+        // episode and resets the counter): a session-lifetime cap would exhaust on earlier storms and erase
+        // the successful peer's comparison evidence for the decisive episode (Codex round 24 -- the 0.8.19
+        // host had 57 throwing calls before its first trap).
+        private const int BreadcrumbCapPerEpisode = 80;
+        private const int EpisodeGapTicks = 100;
         private static int s_breadcrumbs;
+        private static int s_lastPausedCallTick = int.MinValue / 2;
 
         private static void Prefix(AbstractUnitEntity __instance)
         {
@@ -43,14 +55,22 @@ namespace MultiplayerStability
             {
                 if (!NetworkingManager.IsMultiplayer || !Game.Instance.IsPaused)
                     return;                                     // only the paused window is the suspect class
-                if (s_breadcrumbs >= BreadcrumbCap)
+                int tick = Game.Instance.RealTimeController.CurrentNetworkTick;
+                if (tick - s_lastPausedCallTick > EpisodeGapTicks)
+                    s_breadcrumbs = 0;                          // new pause episode: fresh budget
+                s_lastPausedCallTick = tick;
+                if (s_breadcrumbs >= BreadcrumbCapPerEpisode)
                     return;
                 s_breadcrumbs++;
                 MultiplayerStabilityMain.Log("[TrapDiag] ForceRotateToDesired(paused) unit=" + SafeName(__instance)
-                    + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
+                    + " tick=" + tick
                     + " view=" + (__instance.View != null)
-                    + (__instance.View != null ? " visible=" + __instance.View.IsVisible + " ik=" + IkState(__instance) : "")
-                    + (s_breadcrumbs == BreadcrumbCap ? " (breadcrumb cap reached; exceptions still logged)" : ""));
+                    + (__instance.View != null
+                        ? " visible=" + __instance.View.IsVisible
+                          + " vt=" + (__instance.View.ViewTransform != null)
+                          + " ik=" + IkState(__instance)
+                        : "")
+                    + (s_breadcrumbs == BreadcrumbCapPerEpisode ? " (episode cap reached; exceptions still logged)" : ""));
             }
             catch (Exception)
             {
@@ -70,7 +90,11 @@ namespace MultiplayerStability
                         + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
                         + " paused=" + Game.Instance.IsPaused
                         + " view=" + (__instance.View != null)
-                        + (__instance.View != null ? " visible=" + __instance.View.IsVisible + " ik=" + IkState(__instance) : "")
+                        + (__instance.View != null
+                            ? " visible=" + __instance.View.IsVisible
+                              + " vt=" + (__instance.View.ViewTransform != null)
+                              + " ik=" + IkState(__instance)
+                            : "")
                         + " -> " + __exception.GetType().Name + ": " + __exception.Message);
                 }
             }
