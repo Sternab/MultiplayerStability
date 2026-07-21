@@ -93,6 +93,12 @@
 //      HandlePartyCombatStateChanged with its predicates + SetNewInclemency draw with pre/post stream
 //      fingerprints; the next two-sided capture names the differing predicate. NOT a fix (a
 //      DisableStatefulRandomContext wrap would write client-random values into hashed fields -- worse).
+//  20. TRAP/PAUSE DIAGNOSTIC (TrapPauseDiag.cs) -- log-only (capture 0.8.19): trap auto-pause ->
+//      OnRun's paused ForceLookAt -> ForceRotateToDesired writes SIM orientation then touches client-local
+//      View/IK; a one-machine throw there skips DidRun -> command lifecycle diverges (sceneEntities forks,
+//      party members only). Logs paused-window calls + all exceptions (rethrown unchanged); the containment
+//      fix follows this evidence. Also in 0.8.20: DialogRngFix Guard C wraps the THIRD convicted dialogue
+//      caller (HasNextUnselectedAnswers -- Solomorne fork; LeakDetector caught the draws proactively).
 //      (Batch context: FogGateFix gained three sites -- movement 8x, awareness rolls, ricochet candidates --
 //      and DeterministicSleep gained the combat-capable census rule, the corpse reveal-flag re-assert, and
 //      the EntityFader wake-cancel. Channel-B audit, 2026-07-09.)

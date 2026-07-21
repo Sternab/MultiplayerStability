@@ -41,6 +41,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using Kingmaker.Controllers.Dialog;
 using Kingmaker.DialogSystem.Blueprints;
 using Kingmaker.ElementsSystem.ContextData;
 using Kingmaker.Networking;
@@ -80,6 +81,51 @@ namespace MultiplayerStability
                 {
                     s_loggedActive = true;
                     MultiplayerStabilityMain.Log("[DialogRng] Preview guard active -- answer skill-check previews no longer advance hashed streams in multiplayer.");
+                }
+            }
+            catch (Exception)
+            {
+                // fail-open: no context held -> vanilla behaviour
+            }
+        }
+
+        private static Exception Finalizer(IDisposable __state, Exception __exception)
+        {
+            try
+            {
+                __state?.Dispose();
+            }
+            catch (Exception)
+            {
+            }
+            return __exception;
+        }
+    }
+
+    // Guard C (v0.8.20, capture 0.8.19 -- the Solomorne dialogue fork; the LeakDetector caught six
+    // out-of-tick DialogSystem draws as the dialogue opened, the exact contingency the note below reserves):
+    // the THIRD convicted view-time caller is AnswerVM.UpdateView -> DialogController.HasNextUnselectedAnswers
+    // -> ...Internal -> CueSelection.Select. The public HasNextUnselectedAnswers(BlueprintAnswer) is a pure
+    // UI-inspection API -- its only external caller is AnswerVM (:93); the dialog's real advancement never
+    // enters through it -- so the semantic whole-body wrap is valid regardless of tick phase, same shape as
+    // Guard A. The internal recursion is private and only reachable through this entry.
+    [HarmonyPatch(typeof(DialogController), nameof(DialogController.HasNextUnselectedAnswers), typeof(BlueprintAnswer))]
+    internal static class DialogController_HasNextUnselectedAnswers_NoHashedDraw_Patch
+    {
+        private static bool s_loggedActive;
+
+        private static void Prefix(out IDisposable __state)
+        {
+            __state = null;
+            try
+            {
+                if (!NetworkingManager.IsMultiplayer)
+                    return;
+                __state = ContextData<DisableStatefulRandomContext>.Request();
+                if (!s_loggedActive)
+                {
+                    s_loggedActive = true;
+                    MultiplayerStabilityMain.Log("[DialogRng] Inspection guard active -- answer-tree inspection (HasNextUnselectedAnswers) no longer advances hashed streams in multiplayer.");
                 }
             }
             catch (Exception)

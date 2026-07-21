@@ -3,6 +3,16 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
+## 0.8.20
+- Dialogue guard C: the third convicted view-time dialogue caller (`HasNextUnselectedAnswers`, the answer
+  tree inspection behind the Solomorne-dialogue fork) now holds the RNG-divert context in MP — the same
+  semantic caller-wrap shape as the preview getters; the proactive LeakDetector caught these draws before
+  the fork, exactly as designed.
+- Log-only trap/pause diagnostic: trap auto-pause leads `ForceRotateToDesired` to write sim orientation and
+  then touch client-local view/IK state; a one-machine exception there skips command bookkeeping and forks
+  `sceneEntities` (party members only, RNG identical — a longstanding vanilla defect also visible in 0.6.4
+  logs). Instruments the paused window and all exceptions; containment follows the evidence.
+
 ## 0.8.18–0.8.19
 - Log-only diagnostic for a newly captured desync class: the combat-exit weather path (visual
   `IsProfileOverriden` flag steering hashed-Weather draws into hashed player fields). Logs the full gating
