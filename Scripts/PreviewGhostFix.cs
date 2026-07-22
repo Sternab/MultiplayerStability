@@ -34,10 +34,56 @@ using Kingmaker.EntitySystem;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.Mechanics.Entities;
 using Kingmaker.Networking;
+using Kingmaker.UnitLogic;
 using Kingmaker.Utility.StatefulRandom;
 
 namespace MultiplayerStability
 {
+    // Third half (v0.8.24, capture 0.8.23): vanilla's own preview scope has a hole -- UnitHelper.CopyInternal
+    // holds DisableStatefulRandomContext.RequestIf(preview) only around unit creation (:101), but the
+    // subsequent CopyItems call (:128) runs AFTER that using closes, so preview ITEM creation mints hashed
+    // GlobalUuid ids. One peer building more preview batches than the other = the captured creation-count
+    // fork. Fix: in MP, hold the context across the WHOLE public Copy(..., preview: true) operation
+    // (vanilla's inner nested request is unaffected). Solo keeps vanilla's exact scope.
+    [HarmonyPatch(typeof(UnitHelper), nameof(UnitHelper.Copy),
+        typeof(BaseUnitEntity), typeof(bool), typeof(bool), typeof(bool), typeof(bool))]
+    internal static class UnitHelper_Copy_FullPreviewScope_Patch
+    {
+        private static bool s_loggedActive;
+
+        private static void Prefix(bool preview, out IDisposable __state)
+        {
+            __state = null;
+            try
+            {
+                if (!NetworkingManager.IsMultiplayer || !preview)
+                    return;
+                __state = ContextData<DisableStatefulRandomContext>.Request();
+                if (!s_loggedActive)
+                {
+                    s_loggedActive = true;
+                    MultiplayerStabilityMain.Log("[GhostFix] Full preview-copy scope active -- preview item creation no longer mints hashed uuids in multiplayer.");
+                }
+            }
+            catch (Exception)
+            {
+                // fail-open: vanilla scope
+            }
+        }
+
+        private static Exception Finalizer(IDisposable __state, Exception __exception)
+        {
+            try
+            {
+                __state?.Dispose();
+            }
+            catch (Exception)
+            {
+            }
+            return __exception;
+        }
+    }
+
     [HarmonyPatch(typeof(EntityFact), nameof(EntityFact.Attach))]
     internal static class EntityFact_Attach_PreviewStreamSafe_Patch
     {
