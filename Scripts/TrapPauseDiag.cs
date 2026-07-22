@@ -13,27 +13,27 @@
 // regression.
 //
 // This diagnostic does NOT change behavior (exceptions are logged and rethrown unchanged). It exists to
-// give the next capture per-machine evidence of WHERE the asymmetry enters: every ForceRotateToDesired
-// call while paused logs the unit + view/visibility/transform/IK state; every exception logs full context.
-// ACCEPTANCE CRITERION for the two-sided diff (Codex round 24 -- both 0.8.19 peers threw; mere presence of
-// [EXC] lines proves nothing): key every line by (networkTick, UniqueId) and compare the KEYED SETS across
-// peers -- the decisive result is a key that THREW on one peer while the same key logged a successful
-// breadcrumb (or state difference) on the other. That is why successful-call breadcrumbs are first-class
-// evidence and the budget is per pause EPISODE, not per session: a session-lifetime cap exhausted before
-// the decisive window would erase the successful peer's counterpart, making "succeeded" indistinguishable
-// from "never called." The containment fix (guarding the view tail so bookkeeping completes) comes AFTER
-// this evidence, as its own reviewed change. Candidate sibling seams (movement startup,
-// UnitFollowUnitController.ShouldAct's View.MovementAgent.WantsToMove read) are deliberately not
-// instrumented yet -- scope stays on the proven site.
+// give the next capture per-machine evidence of WHERE the asymmetry enters: the FIRST 80 paused-window
+// ForceRotateToDesired calls of each pause episode log unit + view/visibility/transform/IK state, and ALL
+// exceptions log full context regardless of the budget.
+// ACCEPTANCE CRITERION for the two-sided diff (Codex rounds 24-26 -- both 0.8.19 peers threw; mere presence
+// of [EXC] lines proves nothing): every paused-window line carries a UNIQUE key (networkTick, UniqueId, seq)
+// -- seq is a per-tick per-unit counter (dictionary, not last-call comparison, so interleaved A,B,A batching
+// cannot collide) -- and the comparison is a keyed diff across peers: decisive = a key that THREW on one
+// peer while the same key logged a successful breadcrumb (or different state) on the other. Successful-call
+// breadcrumbs are first-class evidence, which is why the budget is per pause EPISODE (reset at the ACCEPTED
+// game-mode transition, HandleGameModeChanged newMode==Pause -- StartMode is only a request that can be
+// rejected or deferred), never per session: a lifetime cap exhausted before the decisive window would erase
+// the successful peer's counterpart, making "succeeded" indistinguishable from "never called." The
+// containment fix (guarding the view tail so bookkeeping completes) comes AFTER this evidence, as its own
+// reviewed change. Candidate sibling seams (movement startup, UnitFollowUnitController.ShouldAct's
+// View.MovementAgent.WantsToMove read) are deliberately not instrumented yet -- scope stays on the proven
+// site.
 //
 // IK objects' types live outside the template reference assemblies -- read reflectively (null-checks only).
-// Log-only -> subset-safe; MP-gated. Breadcrumbs: the FIRST 80 paused-window calls of each pause episode
-// (episode = an actual GameModeType.Pause StartMode transition, with tick-regression as the save/reload
-// fallback); exceptions are always logged regardless of the budget. Every line carries a per-(tick, unit)
-// invocation ordinal (seq) because one unit can run multiple commands in a single simulation tick -- the
-// two-sided comparison must treat records as ordered multisets keyed (tick, unit, seq), or an upstream
-// call-count divergence would masquerade as throw-versus-success.
+// Log-only -> subset-safe; MP-gated.
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using Kingmaker;
@@ -48,19 +48,21 @@ namespace MultiplayerStability
     {
         // Budget is per pause EPISODE: a session-lifetime cap would exhaust on earlier storms and erase the
         // successful peer's comparison evidence for the decisive episode (Codex round 24 -- the 0.8.19 host
-        // had 57 throwing calls before its first trap). The episode boundary is EXACT (Codex round 25): the
-        // budget resets on the real GameModeType.Pause StartMode transition (patch below), so dense
-        // back-to-back traps each get a fresh budget; tick < lastTick (save/reload regression) is the
-        // fallback reset.
+        // had 57 throwing calls before its first trap). The episode boundary is EXACT (Codex rounds 25-26):
+        // the budget resets at the ACCEPTED game-mode transition -- HandleGameModeChanged with newMode ==
+        // Pause (StartMode is only a REQUEST that can be rejected or enqueued as a command, so a StartMode
+        // prefix could reset on rejected/duplicate requests and misalign across peers); tick < lastTick
+        // (save/reload regression) is the fallback reset.
         internal const int BreadcrumbCapPerEpisode = 80;
         internal static int s_breadcrumbs;
+        internal static readonly Dictionary<string, int> s_perTickSeq = new Dictionary<string, int>();
+        private static int s_seqTick = int.MinValue / 2;
         private static int s_lastTick = int.MinValue / 2;
-        private static string s_lastUnit;
-        private static int s_seq;
 
-        // Per-(tick, unit) invocation ordinal: one unit can run several commands in one simulation tick, so
-        // (tick, unit) alone is not a unique key. Computed in the prefix, carried to the finalizer via
-        // __state so the breadcrumb and any [EXC] line for the same invocation share the same seq.
+        // Per-(tick, unit) invocation ordinal via a per-tick dictionary -- a last-call comparison collides
+        // on interleaved batching (A,B,A in one tick gave A:0,B:0,A:0; UnitCommandBuffer.Tick produces
+        // exactly that shape). Assigned ONLY to paused-window calls (the diagnostic key space) so unpaused
+        // traffic cannot perturb the ordinals; computed in the prefix, carried to the finalizer via __state.
         private static void Prefix(AbstractUnitEntity __instance, out int __state)
         {
             __state = -1;
@@ -71,21 +73,24 @@ namespace MultiplayerStability
                 int tick = Game.Instance.RealTimeController.CurrentNetworkTick;
                 if (tick < s_lastTick)
                     s_breadcrumbs = 0;                          // tick regression (save/reload): fallback reset
-                string unit = SafeName(__instance);
-                if (tick == s_lastTick && unit == s_lastUnit)
-                    s_seq++;
-                else
-                    s_seq = 0;
                 s_lastTick = tick;
-                s_lastUnit = unit;
-                __state = s_seq;
                 if (!Game.Instance.IsPaused)
                     return;                                     // only the paused window is the suspect class
+                if (tick != s_seqTick)
+                {
+                    s_perTickSeq.Clear();
+                    s_seqTick = tick;
+                }
+                string unit = SafeName(__instance);
+                int seq;
+                s_perTickSeq.TryGetValue(unit, out seq);
+                s_perTickSeq[unit] = seq + 1;
+                __state = seq;
                 if (s_breadcrumbs >= BreadcrumbCapPerEpisode)
                     return;
                 s_breadcrumbs++;
                 MultiplayerStabilityMain.Log("[TrapDiag] ForceRotateToDesired(paused) unit=" + unit
-                    + " tick=" + tick + " seq=" + s_seq
+                    + " tick=" + tick + " seq=" + seq
                     + " view=" + (__instance.View != null)
                     + (__instance.View != null
                         ? " visible=" + __instance.View.IsVisible
@@ -138,18 +143,25 @@ namespace MultiplayerStability
             }
         }
 
-        // Exact episode boundary: the budget resets when the Pause game mode actually STARTS -- dense
-        // back-to-back trap pauses each get a fresh budget (the 5s-gap heuristic could not separate them,
-        // and a save/reload tick regression made the gap negative and never reset; Codex round 25).
-        [HarmonyPatch(typeof(Game), nameof(Game.StartMode), typeof(GameModeType))]
+        // Exact episode boundary: the budget resets at the ACCEPTED transition -- Game.HandleGameModeChanged
+        // (private; the point every peer's synchronized mode change actually executes) with newMode == Pause.
+        // NOT Game.StartMode: that is a request that can be rejected (already-active, game-over) or enqueued
+        // as a StartGameModeCommand, so a StartMode reset could fire on rejected/duplicate requests and
+        // misalign across peers (Codex round 26). The per-tick ordinal map is also cleared here so an
+        // episode's keys start clean.
+        [HarmonyPatch(typeof(Game), "HandleGameModeChanged",
+            typeof(GameModeType), typeof(GameModeType))]
         internal static class PauseEpisode_Reset_Patch
         {
-            private static void Prefix(GameModeType type)
+            private static void Prefix(GameModeType oldMode, GameModeType newMode)
             {
                 try
                 {
-                    if (type == GameModeType.Pause)
+                    if (newMode == GameModeType.Pause)
+                    {
                         s_breadcrumbs = 0;
+                        s_perTickSeq.Clear();
+                    }
                 }
                 catch (Exception)
                 {
