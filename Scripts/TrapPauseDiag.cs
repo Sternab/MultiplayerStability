@@ -38,7 +38,7 @@
 // disconnections). IMPORTANT CORRECTION from that capture: both peers often threw on the SAME first keyed
 // invocation -- the divergence is DOWNSTREAM: the shared NRE aborts UnitCommandBuffer.Tick mid-batch and the
 // residual commands/handles retry differently per peer. So the cure is containment of the null-IK reset (the
-// batch completes identically), NOT symmetry repair: the reimplementing prefix preserves the sim orientation
+// NRE no longer aborts the batch), NOT symmetry repair: the reimplementing prefix preserves the sim orientation
 // write and the vanilla view-rotation behavior exactly, and ONLY the paused, visible-unit IK reset becomes
 // null-safe (missing IkController/GrounderIk -> skip, logged). Every unrelated exception still surfaces:
 // an unexpected throw in the reimpl falls back to vanilla (idempotent writes), where it recurs naturally.
