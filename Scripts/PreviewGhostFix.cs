@@ -29,8 +29,8 @@
 //   C. (v0.8.24) The whole public UnitHelper.Copy(..., preview: true) holds the context in MP, closing
 //      vanilla's own scope hole over CopyItems/CopyFacts/view creation.
 //
-// Solo untouched (both patches gate on IsMultiplayer). Both machines should run the mod, though this fix
-// degrades gracefully: it removes divergence sources on whichever machine has it.
+// Solo untouched (all three patches gate on IsMultiplayer). Peer-compatibility: EXACT PARITY REQUIRED,
+// like every sim/RNG-changing fix (see the MOD-PLAN doctrine categories).
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;
