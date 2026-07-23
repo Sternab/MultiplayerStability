@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Manifest:
     UniqueName: MultiplayerStability
-    Version: 0.8.27
+    Version: 0.8.28
     DisplayName: Multiplayer Stability
     Description: Co-op stability fixes - faster save transfers
     Author: Sternab

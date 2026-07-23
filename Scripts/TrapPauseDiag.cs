@@ -239,11 +239,7 @@ namespace MultiplayerStability
                             }
                         }
                     }
-                    if (!s_loggedActive)
-                    {
-                        s_loggedActive = true;
-                        MultiplayerStabilityMain.Log("[TrapFix] Containment active -- a missing paused-facing IK graph no longer aborts the command batch with an NRE.");
-                    }
+                    LogActiveOnce();                             // best-effort: must not reach the fail-open
                 }
                 catch (Exception)
                 {
@@ -280,6 +276,23 @@ namespace MultiplayerStability
                 {
                 }
                 return true;                                     // this call and all future calls: vanilla
+            }
+
+            // Strictly best-effort: nothing thrown here may reach the containment path -- a logger failure
+            // re-enabling the vanilla NRE would defeat the fix (Codex rounds 31-32; round 32 caught the
+            // activation log still inside the fail-open try, one branch from the same self-defeat).
+            private static void LogActiveOnce()
+            {
+                try
+                {
+                    if (s_loggedActive)
+                        return;
+                    s_loggedActive = true;
+                    MultiplayerStabilityMain.Log("[TrapFix] Containment active -- a missing paused-facing IK graph no longer aborts the command batch with an NRE.");
+                }
+                catch (Exception)
+                {
+                }
             }
 
             // Strictly best-effort: nothing thrown here may reach the containment path -- a logger or tick
