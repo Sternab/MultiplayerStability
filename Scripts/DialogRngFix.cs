@@ -95,8 +95,9 @@ namespace MultiplayerStability
             {
                 __state?.Dispose();
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                MultiplayerStabilityMain.Log("[DialogRng][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
             }
             return __exception;
         }
@@ -140,8 +141,9 @@ namespace MultiplayerStability
             {
                 __state?.Dispose();
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                MultiplayerStabilityMain.Log("[DialogRng][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
             }
             return __exception;
         }

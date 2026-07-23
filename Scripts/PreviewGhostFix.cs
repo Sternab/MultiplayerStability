@@ -3,7 +3,9 @@
 //
 // The game creates full unit copies for UI purposes -- inventory/character-screen dolls, level-up plan
 // units (LevelUpPlanUnitHolder.RequestPlan) -- CLIENT-LOCALLY (only on the machine whose UI asked). Their
-// CREATION is stream-safe (wrapped in DisableStatefulRandomContext), but UnitHelper.CopyInternal
+// creation was only PARTIALLY stream-safe in vanilla (the DisableStatefulRandomContext scope closed before
+// CopyItems, so preview ITEMS still minted hashed uuids -- proven by capture 0.8.23 and closed by the third
+// patch below), and UnitHelper.CopyInternal
 // SUBSCRIBES the copy to the event bus at the end, so these ghosts keep REACTING to game events forever
 // after: at combat start the pet system applies its control buffs to a preview pet, all-ally auras
 // (Adept Joint Offence, Passive Learning) buff the preview player unit, etc. Those later fact attaches
@@ -15,7 +17,7 @@
 // host-only (+4 GlobalUuid draws at combat start) -- the same +4 signature as the earlier "Pascal fights
 // always desync" captures (his all-ally auras were simply the loudest ghost-buffing system).
 //
-// Two patches:
+// Three patches:
 //   A. EntityFact.Attach on a preview-owned fact runs inside DisableStatefulRandomContext in multiplayer:
 //      the buff still applies (previews keep working for the UI), but its id comes from the non-hashed
 //      fallback -- consistent with previews being entirely OUTSIDE hashed state (scene-entity dumps show
@@ -24,6 +26,8 @@
 //   B. AreaEffectEntity.ShouldUnitBeInside returns false for preview units in multiplayer: ghosts must
 //      not be aura MEMBERS at all -- membership also feeds count-scaled magnitudes (Hive World's
 //      The More The Merrier), which would fork stat values even with stream-safe ids.
+//   C. (v0.8.24) The whole public UnitHelper.Copy(..., preview: true) holds the context in MP, closing
+//      vanilla's own scope hole over CopyItems/CopyFacts/view creation.
 //
 // Solo untouched (both patches gate on IsMultiplayer). Both machines should run the mod, though this fix
 // degrades gracefully: it removes divergence sources on whichever machine has it.
@@ -77,8 +81,11 @@ namespace MultiplayerStability
             {
                 __state?.Dispose();
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                // A stuck DisableStatefulRandomContext would contaminate EVERY subsequent hashed draw --
+                // the one failure here that must never pass silently (Codex round 28).
+                MultiplayerStabilityMain.Log("[GhostFix][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
             }
             return __exception;
         }

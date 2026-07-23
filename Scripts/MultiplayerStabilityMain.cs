@@ -42,8 +42,10 @@
 //      the caster's frame-timed mid-dash view position (which let one client miss a target forever).
 //  10. PREVIEW GHOST FIX (PreviewGhostFix.cs) -- client-local UI preview units (inventory dolls, level-up
 //      plan units) stay subscribed to game events and were receiving combat-start buffs with hashed-stream
-//      ids on one machine only (the "+4 at every combat start" forks). Fact attaches to previews now run
-//      hashed-stream-safe, and previews are excluded from aura membership in multiplayer.
+//      ids on one machine only (the "+4 at every combat start" forks). THREE patches: fact attaches to
+//      previews run hashed-stream-safe; previews are excluded from aura membership; and (v0.8.24) the whole
+//      Copy(...preview:true) holds the RNG-divert context -- vanilla's own scope closed before CopyItems,
+//      so preview ITEMS were still minting hashed uuids (capture 0.8.23 count fork).
 //  11. LEAK DETECTOR (LeakDetector.cs) -- PROACTIVE keystone. One prefix on Rand.Get() (the universal
 //      chokepoint for every hashed RNG draw + uuid mint) logs any draw of a hashed PFStatefulRandom stream
 //      that fires OUTSIDE a deterministic sim tick -- a latent desync, named on ONE machine with no desync
@@ -99,6 +101,10 @@
 //      party members only). Logs paused-window calls + all exceptions (rethrown unchanged); the containment
 //      fix follows this evidence. Also in 0.8.20: DialogRngFix Guard C wraps the THIRD convicted dialogue
 //      caller (HasNextUnselectedAnswers -- Solomorne fork; LeakDetector caught the draws proactively).
+//  21. AUGMENTATION BARK FIX (AugmentationBarkFix.cs) -- the client-local augmentation screen picked a bark
+//      with UnityEngine.Random and its handler wrote hashed Player.PlayedBanters one-sidedly (capture
+//      0.8.23 player-bucket fork). Caller-scoped: a depth counter brackets the AugmentationsVM ctor;
+//      HandleBarkBanter skips while set in MP. Sim-side banter raisers untouched.
 //      (Batch context: FogGateFix gained three sites -- movement 8x, awareness rolls, ricochet candidates --
 //      and DeterministicSleep gained the combat-capable census rule, the corpse reveal-flag re-assert, and
 //      the EntityFader wake-cancel. Channel-B audit, 2026-07-09.)

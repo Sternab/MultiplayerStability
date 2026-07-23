@@ -26,7 +26,9 @@ namespace MultiplayerStability
 {
     internal static class AugmentationBarkFix
     {
-        internal static bool s_inAugmentationsVM;
+        // Depth counter, not a boolean (Codex round 28): a lone flag cleared unconditionally would break
+        // under re-entrant construction or future constructor chaining. Depth is nesting-safe by shape.
+        internal static int s_augVmDepth;
 
         [HarmonyPatch]
         internal static class AugmentationsVM_Ctor_Flag_Patch
@@ -45,13 +47,14 @@ namespace MultiplayerStability
 
             private static void Prefix()
             {
-                s_inAugmentationsVM = true;
+                s_augVmDepth++;
             }
 
-            // Finalizer, not postfix: the flag must clear even if the ctor throws.
+            // Finalizer, not postfix: the depth must unwind even if the ctor throws.
             private static Exception Finalizer(Exception __exception)
             {
-                s_inAugmentationsVM = false;
+                if (s_augVmDepth > 0)
+                    s_augVmDepth--;
                 return __exception;
             }
         }
@@ -66,7 +69,7 @@ namespace MultiplayerStability
             {
                 try
                 {
-                    if (!NetworkingManager.IsMultiplayer || !s_inAugmentationsVM)
+                    if (!NetworkingManager.IsMultiplayer || s_augVmDepth == 0)
                         return true;                             // solo, or a legitimate sim-side raiser
                     if (!s_loggedActive)
                     {

@@ -3,7 +3,7 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.24
+## 0.8.24–0.8.25
 - Augmentation-screen bark containment (capture 0.8.23 `player`-bucket fork): the client-local augmentation
   UI picked a bark with `UnityEngine.Random` and its handler wrote hashed `Player.PlayedBanters` one-sidedly.
   Caller-scoped: a flag brackets the `AugmentationsVM` constructor; `HandleBarkBanter` skips while set in MP —
@@ -11,6 +11,9 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
 - Preview-copy scope completed (same capture, `GlobalUuid` count fork): vanilla's `DisableStatefulRandomContext`
   closes before `CopyItems`, so preview *items* minted hashed uuids; in MP the whole `Copy(..., preview: true)`
   now holds the context.
+- 0.8.25 review round (pre-packaging): bark ctor bracket is a nesting-safe depth counter; every
+  `DisableStatefulRandomContext` dispose failure now logs loudly (a stuck context would contaminate every
+  subsequent hashed draw); PreviewGhostFix/roster/plan documentation updated to the three-patch reality.
 - Same capture also validated: all three save transfers fed-to-game, TrapDiag produced 27 perfectly matching
   records (no exceptions), WeatherDiag matched through both forks, census exact, flap policy correctly prompted
   on both real forks. Open: the Eogann combat fork (all streams/creations matched — needs per-entity hash
