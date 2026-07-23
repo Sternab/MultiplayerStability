@@ -98,8 +98,8 @@
 //  20. TRAP/PAUSE DIAGNOSTIC + CONTAINMENT (TrapPauseDiag.cs) -- (capture 0.8.19 diag; 0.8.xx containment
 //      v0.8.26): trap auto-pause ->
 //      OnRun's paused ForceLookAt -> ForceRotateToDesired writes SIM orientation then touches client-local
-//      View/IK; a one-machine throw there skips DidRun -> command lifecycle diverges (sceneEntities forks,
-//      party members only). Diag logs paused-window calls + all exceptions; CONTAINMENT (v0.8.26) makes
+//      View/IK; the shared NRE aborts the command batch mid-tick and residuals retry differently per peer
+//      (sceneEntities forks, party members only). Diag logs paused-window calls + all exceptions; CONTAINMENT (v0.8.26) makes
 //      only the paused visible-unit IK reset null-safe in MP -- the shared NRE was aborting
 //      UnitCommandBuffer.Tick mid-batch and residuals retried differently per peer -- with the sim write and
 //      all unrelated exceptions preserved. Also in 0.8.20: DialogRngFix Guard C wraps the THIRD convicted dialogue

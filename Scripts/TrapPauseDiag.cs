@@ -6,9 +6,10 @@
 // (AbstractUnitEntity.cs:658) writes SIM orientation (m_Orientation = DesiredOrientation) and THEN touches
 // client-local view state: ViewTransform.rotation, and -- when paused && View.IsVisible -- the IK chain
 // (View.IkController.GrounderIk.ResetPosition()). View.IsVisible and the IK object graph are CLIENT-LOCAL,
-// so on one machine the tail can throw (or simply take a different branch) AFTER the sim write; a throw
-// prevents DidRun/command bookkeeping from completing on THAT machine only -> the party members' command
-// lifecycle and orientation diverge -> the captured sceneEntities forks (Argenta+player @20:38,
+// so the tail can throw AFTER the sim write. (Round-30 correction: both peers often throw on the SAME
+// first keyed invocation -- the divergence is DOWNSTREAM: the shared NRE aborts UnitCommandBuffer.Tick
+// mid-batch and the residual commands/handles retry differently per peer.) Either way the party members'
+// command lifecycle and orientation diverge -> the captured sceneEntities forks (Argenta+player @20:38,
 // Cassia+Kibellah @21:32). Same storm exists in 0.6.4-era logs: a longstanding vanilla defect, not a mod
 // regression.
 //
@@ -153,24 +154,49 @@ namespace MultiplayerStability
             }
         }
 
-        // CONTAINMENT (v0.8.26): reimplement ForceRotateToDesired in MP with a null-safe IK reset. Runs at
-        // LOWER priority than the diagnostic prefix above (so breadcrumbs still record every invocation) and
-        // returns false to skip vanilla; the diagnostic finalizer still wraps everything, so any exception
-        // that escapes containment is logged as [EXC] with full context before rethrow.
+        // CONTAINMENT (v0.8.26, hardened v0.8.27): reimplement ForceRotateToDesired in MP with a null-safe
+        // IK reset. Runs at LOWER priority than the diagnostic prefix above (so breadcrumbs still record
+        // every invocation) and returns false to skip vanilla; the diagnostic finalizer still wraps
+        // everything, so any exception that escapes is logged as [EXC] with full context before rethrow.
+        // v0.8.27 failure-routing contract (Codex round 31):
+        //   - reflection DRIFT (member lookup fails after a game update) -> vanilla, latched, [ERR] once --
+        //     drift must never masquerade as the known defect;
+        //   - successfully READ null IkController/GrounderIk -> the known defect -> contained + logged
+        //     (logging is strictly best-effort: a logger throw cannot re-enable the vanilla NRE);
+        //   - a real ResetPosition() failure -> surfaces ONCE, unwrapped, past our fail-open (no vanilla
+        //     rerun of a non-idempotent reset);
+        //   - anything else unexpected in the reimpl -> vanilla (idempotent writes only at that point).
+        // The orientation FieldRef resolves in Prepare(): if it fails (rename), the patch DECLINES and
+        // vanilla stands -- a static-initializer throw would instead have broken the method entirely.
         [HarmonyPatch(typeof(AbstractUnitEntity), nameof(AbstractUnitEntity.ForceRotateToDesired))]
         [HarmonyPriority(Priority.Low)]
         internal static class ForceRotateToDesired_Containment_Patch
         {
-            private static readonly AccessTools.FieldRef<AbstractUnitEntity, float> s_orientation =
-                AccessTools.FieldRefAccess<AbstractUnitEntity, float>("m_Orientation");
-
+            private static AccessTools.FieldRef<AbstractUnitEntity, float> s_orientation;
             private static bool s_loggedActive;
+            private static bool s_reflectionDrift;
             private static int s_containedCount;
+
+            private static bool Prepare()
+            {
+                try
+                {
+                    s_orientation = AccessTools.FieldRefAccess<AbstractUnitEntity, float>("m_Orientation");
+                    return s_orientation != null;
+                }
+                catch (Exception e)
+                {
+                    MultiplayerStabilityMain.Log("[TrapFix][ERR] m_Orientation not resolvable -- containment declined, vanilla stands: " + e.Message);
+                    return false;                                // patch not applied at all
+                }
+            }
 
             private static bool Prefix(AbstractUnitEntity __instance)
             {
-                if (!NetworkingManager.IsMultiplayer)
-                    return true;                                 // solo: vanilla exactly, bug and all
+                if (!NetworkingManager.IsMultiplayer || s_reflectionDrift)
+                    return true;                                 // solo, or drift-latched: vanilla exactly
+                object grounder = null;
+                MethodInfo reset = null;
                 try
                 {
                     // Vanilla body, faithfully -- the SIM write always happens first and unconditionally.
@@ -182,47 +208,98 @@ namespace MultiplayerStability
                         // Deliberately unguarded like vanilla (containment scope is the IK reset ONLY):
                         view.ViewTransform.rotation = UnityEngine.Quaternion.Euler(0f, __instance.Orientation, 0f);
                         if (isPaused && view.IsVisible)
-                            NullSafeIkReset(__instance, view);
+                        {
+                            // Metadata must resolve (else: drift -> vanilla). Only a successfully READ null
+                            // value is the known defect to contain.
+                            var ikProp = AccessTools.Property(view.GetType(), "IkController");
+                            if (ikProp == null)
+                                return Drift("IkController property");
+                            var ik = ikProp.GetValue(view);
+                            if (ik == null)
+                            {
+                                LogContained(__instance, "noik");
+                            }
+                            else
+                            {
+                                var grounderProp = AccessTools.Property(ik.GetType(), "GrounderIk");
+                                if (grounderProp == null)
+                                    return Drift("GrounderIk property");
+                                var g = grounderProp.GetValue(ik);
+                                if (g == null)
+                                {
+                                    LogContained(__instance, "nogrounder");
+                                }
+                                else
+                                {
+                                    reset = g.GetType().GetMethod("ResetPosition", Type.EmptyTypes);
+                                    if (reset == null)
+                                        return Drift("ResetPosition()");
+                                    grounder = g;                // invoke OUTSIDE the fail-open try below
+                                }
+                            }
+                        }
                     }
                     if (!s_loggedActive)
                     {
                         s_loggedActive = true;
-                        MultiplayerStabilityMain.Log("[TrapFix] Containment active -- paused-facing IK resets are null-safe; command batches complete identically on every machine.");
+                        MultiplayerStabilityMain.Log("[TrapFix] Containment active -- a missing paused-facing IK graph no longer aborts the command batch with an NRE.");
                     }
-                    return false;                                // vanilla skipped; batch bookkeeping proceeds
                 }
                 catch (Exception)
                 {
-                    // Unexpected failure in the reimpl: fall back to vanilla (both writes are idempotent);
-                    // whatever threw here recurs there and surfaces normally (diag finalizer logs it).
+                    // Unexpected failure in the reimpl BEFORE any IK invoke: fall back to vanilla (the
+                    // writes so far are idempotent); whatever threw recurs there and surfaces normally.
                     return true;
                 }
+                if (grounder != null && reset != null)
+                {
+                    // A real ResetPosition failure is unrelated to null-containment and must surface ONCE:
+                    // unwrap and rethrow PAST our fail-open (no vanilla rerun of a non-idempotent reset).
+                    // The diag finalizer above still logs it with full context.
+                    try
+                    {
+                        reset.Invoke(grounder, null);
+                    }
+                    catch (TargetInvocationException tie)
+                    {
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                            .Capture(tie.InnerException ?? tie).Throw();
+                    }
+                }
+                return false;                                    // vanilla skipped; batch bookkeeping proceeds
             }
 
-            private static void NullSafeIkReset(AbstractUnitEntity unit, object view)
+            private static bool Drift(string member)
             {
-                var ik = AccessTools.Property(view.GetType(), "IkController")?.GetValue(view);
-                object grounder = ik != null
-                    ? AccessTools.Property(ik.GetType(), "GrounderIk")?.GetValue(ik)
-                    : null;
-                if (ik == null || grounder == null)
+                s_reflectionDrift = true;
+                try
                 {
-                    // The exact would-have-been-NRE vanilla throws mid-command -- contained. Each event is
-                    // evidence (it maps 1:1 onto the old [TrapDiag][EXC] lines), so log it, bounded.
-                    if (s_containedCount < 200)
-                    {
-                        s_containedCount++;
-                        MultiplayerStabilityMain.Log("[TrapFix] Contained missing-IK reset: unit="
-                            + (unit != null ? unit.UniqueId : "null")
-                            + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
-                            + " " + (ik == null ? "noik" : "nogrounder")
-                            + (s_containedCount == 200 ? " (containment log cap reached)" : ""));
-                    }
-                    return;
+                    MultiplayerStabilityMain.Log("[TrapFix][ERR] reflection drift (" + member + " not found) -- containment disabled, vanilla stands.");
                 }
-                // IK present: perform vanilla's reset. An exception INSIDE ResetPosition is unrelated to the
-                // null-containment and must surface -- it propagates to the outer catch -> vanilla rerun.
-                AccessTools.Method(grounder.GetType(), "ResetPosition")?.Invoke(grounder, null);
+                catch (Exception)
+                {
+                }
+                return true;                                     // this call and all future calls: vanilla
+            }
+
+            // Strictly best-effort: nothing thrown here may reach the containment path -- a logger or tick
+            // failure re-enabling the vanilla NRE would defeat the fix (Codex round 31).
+            private static void LogContained(AbstractUnitEntity unit, string kind)
+            {
+                try
+                {
+                    if (s_containedCount >= 200)
+                        return;
+                    s_containedCount++;
+                    MultiplayerStabilityMain.Log("[TrapFix] Contained missing-IK reset: unit="
+                        + (unit != null ? unit.UniqueId : "null")
+                        + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
+                        + " " + kind
+                        + (s_containedCount == 200 ? " (containment log cap reached)" : ""));
+                }
+                catch (Exception)
+                {
+                }
             }
         }
 

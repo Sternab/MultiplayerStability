@@ -3,13 +3,19 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.26
+## 0.8.26–0.8.27
 - Trap/pause containment shipped (4.5-hour capture, evidence conclusive: 72-vs-10 trap NREs, 514-vs-107
   residual command exceptions, forks isolated to touched units, zero RNG differences; three trap storms
   immediately preceded room disconnects): in MP, `ForceRotateToDesired`'s paused visible-unit IK reset is
   null-safe — the shared NRE was aborting the command batch mid-tick with per-peer retry residue. Sim
   orientation write, vanilla view rotation, and every unrelated exception preserved; solo untouched.
   Diagnostic breadcrumbs and finalizer remain armed as the containment's watchdog.
+- 0.8.27 hardening round: containment logging is strictly best-effort (a logger throw can no longer re-enable
+  the vanilla NRE); reflection drift (failed member lookup after a game update) now latches back to vanilla
+  instead of masquerading as the known null-IK defect; the orientation FieldRef resolves in a guarded
+  `Prepare()` (patch declines cleanly on rename); and a real `ResetPosition` failure surfaces once, unwrapped,
+  with no vanilla rerun of a non-idempotent reset. Wording corrected: the fix prevents the NRE from aborting
+  the batch — it does not claim batches are otherwise identical.
 - Open from the same capture (diagnostics queued next): Tactician `MomentumThisCombat` hidden-accumulator
   divergence (omitted from its part hash — same base-only hash mistake found in `MomentumReachedTrigger`,
   `HunterDodge`, `ChangeVeilDamage`; bounded hash-audit queued) and the area-effect candidate census filled
