@@ -95,11 +95,14 @@
 //      HandlePartyCombatStateChanged with its predicates + SetNewInclemency draw with pre/post stream
 //      fingerprints; the next two-sided capture names the differing predicate. NOT a fix (a
 //      DisableStatefulRandomContext wrap would write client-random values into hashed fields -- worse).
-//  20. TRAP/PAUSE DIAGNOSTIC (TrapPauseDiag.cs) -- log-only (capture 0.8.19): trap auto-pause ->
+//  20. TRAP/PAUSE DIAGNOSTIC + CONTAINMENT (TrapPauseDiag.cs) -- (capture 0.8.19 diag; 0.8.xx containment
+//      v0.8.26): trap auto-pause ->
 //      OnRun's paused ForceLookAt -> ForceRotateToDesired writes SIM orientation then touches client-local
 //      View/IK; a one-machine throw there skips DidRun -> command lifecycle diverges (sceneEntities forks,
-//      party members only). Logs paused-window calls + all exceptions (rethrown unchanged); the containment
-//      fix follows this evidence. Also in 0.8.20: DialogRngFix Guard C wraps the THIRD convicted dialogue
+//      party members only). Diag logs paused-window calls + all exceptions; CONTAINMENT (v0.8.26) makes
+//      only the paused visible-unit IK reset null-safe in MP -- the shared NRE was aborting
+//      UnitCommandBuffer.Tick mid-batch and residuals retried differently per peer -- with the sim write and
+//      all unrelated exceptions preserved. Also in 0.8.20: DialogRngFix Guard C wraps the THIRD convicted dialogue
 //      caller (HasNextUnselectedAnswers -- Solomorne fork; LeakDetector caught the draws proactively).
 //  21. AUGMENTATION BARK FIX (AugmentationBarkFix.cs) -- the client-local augmentation screen picked a bark
 //      with UnityEngine.Random and its handler wrote hashed Player.PlayedBanters one-sidedly (capture
