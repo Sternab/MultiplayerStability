@@ -1,5 +1,5 @@
 // Idle-animation RNG fix -- the Animation3 flapper class, root-caused at last (three-machine capture
-// 0.8.10, Codex-identified; every claim re-verified in the decompile before building).
+// 0.8.10; every claim re-verified in the decompile before building).
 //
 // AnimationManager.StatefulRandom (AnimationManager.cs:32) maps to PFStatefulRandom.Visuals.Animation3 --
 // which IS in the serialized/HASHED randomState set. Unit idle variety draws it on the view/animation
@@ -24,7 +24,7 @@
 //   3. UnitAnimationActionMicroIdle.OnStart   (:45 -- variant pick)
 //   4. UnitAnimationActionVariantIdle.OnStart (:42/:50/:98/:107 -- override chances + variant pick)
 //
-// Deliberately NOT touched (Codex caution, verified they share the same property): UnitAnimationActionDodge
+// Deliberately NOT touched (verified they share the same property): UnitAnimationActionDodge
 // (:103) and UnitAnimationActionSpecialAttack (:180) -- combat animation-variant picks that may deserve the
 // same treatment but need their own audit (they fire inside synced combat execution, where the hashed draw
 // is symmetric and harmless unless proven otherwise). Do not widen this patch to them without a capture.

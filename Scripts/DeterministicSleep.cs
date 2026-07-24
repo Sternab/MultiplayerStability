@@ -49,7 +49,7 @@ namespace MultiplayerStability
         private const float FarDistanceSq = 40f * 40f;             // combat-capable / bystander sleep valve
                                                                     // (generous buffer over join-scan vision)
         // Separate, tighter radius for the ambient cutscene-hold (v0.8.6, measured: Thassera co-op held 21
-        // scene-loops running at 40m -- James's solo-vs-co-op A/B pinned the residual chug on exactly this;
+        // scene-loops running at 40m -- a solo-vs-co-op A/B pinned the residual chug on exactly this;
         // vanilla pauses those loops off-camera, so holding a plaza's worth is real extra simulation).
         // Any synced radius is deterministically correct -- this only trades ambient liveliness vs perf.
         private const float CutsceneHoldDistanceSq = 25f * 25f;
@@ -108,7 +108,7 @@ namespace MultiplayerStability
                     // Starships are NEVER slept. Space combat runs with combatMode=True, but the distance
                     // valve is meaningless at ship scale (ships sit hundreds of units apart, all read as
                     // ">40m = far") and idle allied ships aren't flagged IsInCombat -- so the valve slept
-                    // them, and a slept ship's view doesn't render until a move command wakes it (James's
+                    // them, and a slept ship's view doesn't render until a move command wakes it (field report:
                     // "allied ships only appear after moving", census showed awake 2 vs vanilla 4). Space
                     // combat is a handful of units, so always-awake is free.
                     bool held = dying || cutsceneHeld || (unit is StarshipEntity);
@@ -134,7 +134,7 @@ namespace MultiplayerStability
                 // Apply pass: trivial assignments only. Per-unit write ORDER matches vanilla (corpse reveal
                 // FIRST, then IsSleeping -- SleepingUnitsController :57-:69): both setters call
                 // UpdateViewActive() and view activeness depends on both flags, so the reversed order could
-                // flicker a corpse's view off/on exactly when its state changes (Codex catch).
+                // flicker a corpse's view off/on exactly when its state changes (review catch).
                 for (int i = 0; i < s_pendingUnits.Count; i++)
                 {
                     var unit = s_pendingUnits[i];
@@ -158,7 +158,7 @@ namespace MultiplayerStability
                 Game.Instance.State.SetNewAwakeUnits(s_awake);
                 // Periodic census line (~60s): quantifies what the census costs vs vanilla on this map --
                 // the data that decides perf questions (bridge FPS) instead of guessing. Deliberately BEFORE
-                // the timer aging so the aging loop is literally the last work in the pass (Codex round 9:
+                // the timer aging so the aging loop is literally the last work in the pass (review catch:
                 // with logging after it, a logger throw could rerun vanilla and double-age timers).
                 if (++s_censusTicks >= 1200 || !s_loggedActive)
                 {
@@ -206,7 +206,7 @@ namespace MultiplayerStability
         // PURE replica of vanilla SleepingUnitsController.ShouldBeSleeping (decompile :88-104) for the
         // ambient branch, since the prefix REPLACES vanilla's pass. Vanilla mutates AwakeTimer inside this
         // method; here the verdict only READS it (same pre-decrement semantics as vanilla's >= 0 check) and
-        // the aging is STAGED into the apply pass (Codex catch: (a) the deterministic branch bypassed the
+        // the aging is STAGED into the apply pass (review catch: (a) the deterministic branch bypassed the
         // decrement entirely, so a Wake()'d combat-capable unit kept a positive timer forever; (b) a
         // compute-phase mutation broke the "untouched vanilla on exception" claim and risked a double
         // decrement when vanilla reran after a failure). Deliberately client-local (camera/fog) exactly
@@ -242,7 +242,7 @@ namespace MultiplayerStability
             // Vanilla invariant (ShouldBeSleeping :94/:103): a non-suppressed Sleepless unit NEVER sleeps
             // via the camera/fog clauses -- roaming spawner units and follower behaviours rely on it. This
             // check was missing since v0.6.1 (combat mode) and the combat-capable peaceful rule widened the
-            // exposure (Codex catch). Order matches vanilla: Suppressed sleep wins over Sleepless.
+            // exposure (review catch). Order matches vanilla: Suppressed sleep wins over Sleepless.
             if (unit.Sleepless)
                 return false;
             // Everything else sleeps by synced DISTANCE alone (replaces the camera/fog test for ALL unit

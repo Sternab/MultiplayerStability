@@ -1,4 +1,4 @@
-// Charge-path cache DIAGNOSTIC -- log-only (Codex round 33; tester report: "charged, attacked, he parried,
+// Charge-path cache DIAGNOSTIC -- log-only (tester report: "charged, attacked, he parried,
 // desync -- my char and the enemy stood on the SAME TILE"; ChargeBuff appeared 12-13 ticks before both
 // first mismatches).
 //
@@ -13,13 +13,13 @@
 // REMOVED the partial lookup entirely and requires target-identity match on full-cache hits
 // (DH PathfindingService :713).
 //
-// SINCE v0.8.30 THIS FILE CARRIES THE FIX (Codex round 34 -- conviction from symptom + mechanism + Dark
+// SINCE v0.8.30 THIS FILE CARRIES THE FIX (conviction from symptom + mechanism + Dark
 // Heresy corroboration, no capture needed): in MP, partial-cache reuse is DISABLED (prefix returns null);
 // exact target-checked hits stay cached; unmatched paths recompute; solo untouched. This is a
-// SIMULATION-CHANGING fix: EXACT PARITY REQUIRED (see MOD-PLAN doctrine) -- a mixed install changes which
+// SIMULATION-CHANGING fix: EXACT PARITY REQUIRED (see PATCH-CATALOG.md) -- a mixed install changes which
 // path one peer charges along.
 //
-// The resolution diagnostic remains as the fix's TRIPWIRE, with honest epistemics (Codex round 35): the
+// The resolution diagnostic remains as the fix's TRIPWIRE, with honest epistemics: the
 // prefix and postfix live in the SAME patch class, so silence alone is inconclusive (a failed install
 // removes both). Verification of the fix requires all three: (1) no [Init][ERR] for Partial_Patch at boot,
 // (2) the one-time "[ChargeFix] Active" line, (3) no subsequent "partial-cache" source line in MP.
@@ -60,7 +60,7 @@ namespace MultiplayerStability
             }
         }
 
-        // THE FIX (v0.8.30, Codex round 34 -- conviction threshold met without waiting for the capture): in
+        // THE FIX (v0.8.30 -- conviction threshold met without waiting for the capture): in
         // MP, partial-cache reuse is disabled outright -- the lookup ignores the target entity whose
         // occupancy shaped the cached path (aiming previews feed the same cache), so it can hand ONE client
         // a preview-polluted path cut at the enemy's occupied node, and delivery writes Caster.Position to
@@ -103,7 +103,7 @@ namespace MultiplayerStability
                         return;
                     MultiplayerStabilityMain.Log("[ChargeFix] Active -- partial charge-path cache reuse disabled in multiplayer (exact hits kept; unmatched paths recompute).");
                     s_loggedActive = true;       // latch AFTER success: a failed log retries later, so the
-                                                 // verification signal is never permanently lost (round 36)
+                                                 // verification signal is never permanently lost
                 }
                 catch (Exception)
                 {

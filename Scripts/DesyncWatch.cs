@@ -183,14 +183,14 @@ namespace MultiplayerStability
                     // flags: they then accumulate cleanly through potential->serious, and nothing wipes the
                     // suppress flag on the serious tick. (HasDesync only turns true AT the serious threshold,
                     // so a HasDesync-rising-edge reset fired on the serious tick and cleared the just-set
-                    // suppress flag, breaking escalation -- Codex catch.)
+                    // suppress flag, breaking escalation -- review catch.)
                     if (m_Kind != "serious")
                         ResetEpisodeFlags();
 
                     // The ACTUAL player-facing dialog is vanilla UIDesyncHandler.ShowMessageBox; it runs earlier
                     // in the same composite dispatch and its prefix (below) already decided whether to suppress
                     // it as a transition flap, recording s_episodeBoxSuppressed. Our log wording just mirrors
-                    // that decision -- we never controlled the prompt from here (the v0.7.6 mistake Codex caught).
+                    // that decision -- we never controlled the prompt from here (a v0.7.6 mistake caught in review).
                     bool flap = m_Kind == "serious" && s_episodeBoxSuppressed;
 
                     string header = flap
@@ -306,7 +306,7 @@ namespace MultiplayerStability
         }
 
         // A transition flap = a CONFIRMED randomState-only episode occurring in/just-after a transition. The
-        // gate requires POSITIVE randomState confirmation (not mere absence of a contrary bucket, per Codex):
+        // gate requires POSITIVE randomState confirmation (not mere absence of a contrary bucket):
         // if attribution never resolved a bucket we do NOT treat it as a flap, so the dialog shows (safe).
         // randomState alone is insufficient (RuleSystem is randomState -- the burst fork was randomState in
         // active combat); the transition window is what makes suppression safe.

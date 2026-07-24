@@ -19,7 +19,7 @@
 // Siblings NOW HANDLED by ProjectilePositionFix.cs (v0.8.7): GetTargetPointForStarship's conditional draw,
 // TryGetTargetPointByRandomLocator's conditional draw, AND the residual live-bone GEOMETRY this fix left
 // behind (the chosen locator's live Transform still fed GetTargetPoint -> ricochet/push mechanics; a client
-// with a ParticlesSnapMap and one without computed different geometry despite identical RNG -- Codex/Solasta
+// with a ParticlesSnapMap and one without computed different geometry despite identical RNG -- Solasta
 // doctrine catch). In MP all three now take the engine's own deterministic no-view fallbacks.
 using System.Collections.Generic;
 using System.Reflection;

@@ -20,7 +20,7 @@
 //     COUNTS differ per machine -- host drew 0 times, client 5. Nothing timing-based can distinguish
 //     view-preview from sim draws; the discriminator must be SEMANTIC (which caller), not temporal.
 //
-// FIX -- two complementary, timing-independent guards (Codex-reviewed shape, two-sided capture 0.8.8):
+// FIX -- two complementary, timing-independent guards (review-hardened shape, two-sided capture 0.8.8):
 //
 //  A. SEMANTIC WRAP of the two UI-preview getters, BlueprintAnswer.SkillChecks (:109) and SkillChecksDC
 //     (:131), in DisableStatefulRandomContext in MP. These getters are preview-by-definition regardless of

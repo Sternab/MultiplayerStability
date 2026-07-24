@@ -16,7 +16,7 @@
 //   2. event about a DIFFERENT entity than this slot's unit -> skip (kills the ~1,500x amplification; the
 //      slot still refreshes when ITS unit's role actually changes, which is the handler's purpose).
 // Vanilla behaviour is preserved exactly for the one event that matters to each slot. Deliberately NOT a
-// global exception suppressor -- real exceptions elsewhere keep their full context (Codex's line, agreed).
+// global exception suppressor -- real exceptions elsewhere keep their full context.
 // UNGATED (no IsMultiplayer check): the filtering invariant is valid in EVERY context, including teardown
 // and the rare non-departure raisers (the net_allow_one cheat raises the room callbacks; PlayerRole.ForceSet
 // raises HandleRoleSet) -- an unrelated entity's role event cannot affect a slot, and a unitless slot has no
@@ -44,7 +44,7 @@ namespace MultiplayerStability
                 // matter who raised it (departure teardown, PlayerRole.ForceSet, cheats). The instantaneous
                 // PlayerCount>1 check actively DISABLED the guard during 2->1 departures (Owlcat removes
                 // the departing player BEFORE raising the callbacks) -- the captured storm's biggest window
-                // (~270 of 425 stacks; Codex catch).
+                // (~270 of 425 stacks in the field capture).
                 var slot = __instance.MechanicActionBarSlot;
                 var unit = slot != null ? slot.Unit : null;
                 if (unit == null)

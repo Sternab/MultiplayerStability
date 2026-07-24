@@ -1,5 +1,5 @@
 // Weather combat-exit DIAGNOSTIC -- log-only instrumentation for the second weather determinism bug
-// (capture "0.8.17 SECOND", Codex rounds 20-21): at combat end (tick 7595434, FakeEmperorAppear), one
+// (capture "0.8.17 SECOND"): at combat end (tick 7595434, FakeEmperorAppear), one
 // client drew the hashed Weather stream once more than the other; Player.Weather/Wind.NextWeatherChange
 // are in the player hash, so the player bucket forked first, then randomState, persisting.
 //
@@ -16,11 +16,11 @@
 //
 // Deliberately NOT a fix. Do NOT wrap this path in DisableStatefulRandomContext: the draws write into
 // HASHED player fields, so diverting them to client-random fallback values would write different values on
-// each machine and make the fork worse (Codex's explicit warning).
+// each machine and make the fork worse (explicit review warning).
 //
 // Compile-safety: InclemencyType, IsProfileOverriden, and TargetInclemency's return type all live in
 // Owlcat.Runtime.Visual (NOT a template reference assembly) -- every such member is accessed reflectively;
-// CurrentWeatherEffect is a public FIELD (not property; Codex catch -- AccessTools.Field, not .Property).
+// CurrentWeatherEffect is a public FIELD (not property; review catch -- AccessTools.Field, not .Property).
 //
 // Log-only -> subset-safe. MP-gated to keep solo logs quiet (mid-session instrumentation, not
 // teardown-path -- the 0.8.17 gate lesson does not apply).

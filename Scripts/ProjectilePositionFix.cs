@@ -1,6 +1,6 @@
 // Projectile POSITION fix -- the geometry half of the projectile family (ProjectileRngFix is the RNG half).
 //
-// Doctrine (from the Solasta comparison, Codex round 10): view state -- camera, fog, renderers, animation
+// Doctrine (from the Solasta comparison): view state -- camera, fog, renderers, animation
 // BONES, View availability -- may control presentation only; MECHANICAL positions must come from
 // entity/grid state or deterministic offsets. Solasta carries visual and deterministic positions separately
 // (WorldLocationCharacter reconstructs bones from deterministic position; miss/travel math never reads live

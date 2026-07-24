@@ -1,4 +1,4 @@
-// Augmentation-screen bark containment (capture 0.8.23, Codex round 27; player-bucket fork confirmed).
+// Augmentation-screen bark containment (capture 0.8.23; player-bucket fork confirmed).
 //
 // The Star System augmentation screen (AugmentationsVM ctor, :99/:111) picks a cosmetic bark with
 // UnityEngine.Random.Range and raises IBarkBanterPlayedHandler. BarkBanterController.HandleBarkBanter (:49)
@@ -26,7 +26,7 @@ namespace MultiplayerStability
 {
     internal static class AugmentationBarkFix
     {
-        // Depth counter, not a boolean (Codex round 28): a lone flag cleared unconditionally would break
+        // Depth counter, not a boolean (review catch): a lone flag cleared unconditionally would break
         // under re-entrant construction or future constructor chaining. Depth is nesting-safe by shape.
         internal static int s_augVmDepth;
 

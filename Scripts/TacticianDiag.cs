@@ -1,4 +1,4 @@
-// Tactician momentum DIAGNOSTIC -- log-only (Codex rounds 27+30+33): TacticalAdvantagePassive accumulates
+// Tactician momentum DIAGNOSTIC -- log-only: TacticalAdvantagePassive accumulates
 // a fractional remainder in data.MomentumThisCombat (+= evt.ResultDeltaValue * multiplier; -= 100 per
 // crossing) and adds TacticianTacticalAdvantageBuff on each 100-crossing -- but Data.GetHash128 OMITS the
 // accumulator entirely, so a remainder divergence is invisible to desync detection until one peer crosses

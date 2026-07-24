@@ -30,7 +30,7 @@
 //      vanilla's own scope hole over CopyItems/CopyFacts/view creation.
 //
 // Solo untouched (all three patches gate on IsMultiplayer). Peer-compatibility: EXACT PARITY REQUIRED,
-// like every sim/RNG-changing fix (see the MOD-PLAN doctrine categories).
+// like every sim/RNG-changing fix (see the PATCH-CATALOG.md peer-compatibility categories).
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;
@@ -84,7 +84,7 @@ namespace MultiplayerStability
             catch (Exception e)
             {
                 // A stuck DisableStatefulRandomContext would contaminate EVERY subsequent hashed draw --
-                // the one failure here that must never pass silently (Codex round 28).
+                // the one failure here that must never pass silently (review catch).
                 MultiplayerStabilityMain.Log("[GhostFix][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
             }
             return __exception;

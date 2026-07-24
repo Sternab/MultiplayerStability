@@ -21,7 +21,7 @@
 // memory order = client-local). Residues accepted: effects land at dash END rather than mid-pass (visual
 // timing only), and the delivery tick can still skew by the dash duration (count-equal streams re-align,
 // but tick-skewed side effects are NOT guaranteed harmless: threshold-crossing accumulators like the
-// Tactician momentum remainder can latch a skew permanently -- Codex round 34 correction). On
+// Tactician momentum remainder can latch a skew permanently -- review correction). On
 // the engine's own 5s force-finish error path the agent may still report moving at the final call -- then
 // delivery is skipped symmetrically (a fizzle on an already-errored cast, not a fork).
 // Solo behaviour untouched. Both machines must run the mod (the standing install rule).

@@ -5,7 +5,7 @@
 // rule (e.g. a global damage modifier injecting into RuleRollDamage) then forks the RuleSystem stream ->
 // desync. Field-proven: a burst attack forked RuleSystem with PascalCompanion[PREVIEW] as the only anomaly.
 //
-// DESIGN (narrow registration-time guard). Credit: a Codex review of the first cut (a broad reflection sweep
+// DESIGN (narrow registration-time guard). Credit: external review of the first cut (a broad reflection sweep
 // that patched every unit-owned global handler method + resolved owners during dispatch) correctly flagged
 // it as more blast radius than the evidence needs, and pointed out that the SUBSCRIBE site can resolve the
 // owner via the proxy and skip preview-owned GLOBAL registrations centrally. Verified before adopting:
