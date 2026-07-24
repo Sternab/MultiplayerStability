@@ -10,7 +10,9 @@ Usage (run from the repository root):
     python tools/verify-comments-only.py [<git-range>]
 
     <git-range> defaults to "v0.8.32..HEAD" -- the documentation and comment work sitting on top of
-    the tagged build this package ships. Any git range works, e.g. HEAD~3..HEAD.
+    the tagged build this package ships. Also accepts A..B, A...B (compares from the merge base) and
+    a bare revision (compares that revision against the current working tree). Both sides of a
+    two-dot or three-dot range are read from git, never from the working tree.
 
 Exit code 0 = comments only; 1 = at least one file's executable content differs. This is the check
 cited by HANDOFF-MANIFEST.md and by the handoff package's README.
@@ -73,14 +75,41 @@ def strip(src):
     return ' '.join(''.join(out).split())
 
 
+def endpoints(rng):
+    """Resolve a range to (base, tip). tip None means 'the working tree'.
+
+    Both sides must be resolved explicitly: reading the 'after' side from disk when the range names
+    an explicit right-hand commit would compare the wrong pair and could report a real code change
+    as comments-only.
+    """
+    if "..." in rng:                       # A...B -> compare from the merge base
+        a, _, b = rng.partition("...")
+        a, b = a or "HEAD", b or "HEAD"
+        base = subprocess.check_output(['git', 'merge-base', a, b], text=True).strip()
+        return base, b
+    if ".." in rng:                        # A..B (B defaults to HEAD)
+        a, _, b = rng.partition("..")
+        return (a or "HEAD"), (b or "HEAD")
+    return rng, None                       # bare rev: git diff <rev> compares against the work tree
+
+
+def blob(ref, path):
+    """File content at <ref>, or from the working tree when ref is None."""
+    if ref is None:
+        return io.open(path, encoding='utf-8-sig', errors='replace').read()
+    out = subprocess.check_output(['git', 'show', ref + ':' + path], text=False)
+    return out.decode('utf-8-sig', errors='replace')
+
+
 def main(argv):
     rng = argv[1] if len(argv) > 1 else "v0.8.32..HEAD"
     try:
         changed = subprocess.check_output(['git', 'diff', '--name-only', rng], text=True).split()
+        base, tip = endpoints(rng)
     except subprocess.CalledProcessError as e:
-        print("git diff failed for range %r: %s" % (rng, e))
+        print("git failed for range %r: %s" % (rng, e))
         return 2
-    base = rng.split('..')[0] or 'HEAD'
+    print("comparing %s -> %s" % (base, tip if tip is not None else "working tree"))
     cs = [f for f in changed if f.endswith('.cs')]
     if not cs:
         print("no .cs files changed in %s -- nothing to prove" % rng)
@@ -88,13 +117,17 @@ def main(argv):
     bad = []
     for f in cs:
         try:
-            before = subprocess.check_output(['git', 'show', base + ':' + f], text=False)
+            before = blob(base, f)
         except subprocess.CalledProcessError:
             print("  %-13s %s" % ("ADDED", f))
             bad.append(f)
             continue
-        before = before.decode('utf-8-sig', errors='replace')
-        after = io.open(f, encoding='utf-8-sig', errors='replace').read()
+        try:
+            after = blob(tip, f)
+        except (subprocess.CalledProcessError, IOError):
+            print("  %-13s %s" % ("DELETED", f))
+            bad.append(f)
+            continue
         same = strip(before) == strip(after)
         print("  %-13s %s" % ("comments-only" if same else "DIFFERS", f))
         if not same:

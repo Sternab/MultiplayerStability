@@ -91,5 +91,6 @@ Get-FileHash .\pkg\Assemblies\MultiplayerStability.dll -Algorithm SHA256
 `tools/verify-package.ps1` (in this repository) automates package verification. When run from the
 review snapshot, pass `-AllowDllOlderThanSource`: the snapshot's comment-only edits postdate the
 frozen build, and the freshness check reports that honestly otherwise.
-`tools/check-harmony-targets.py` verifies every documented Harmony target still resolves in a given
-`Code.dll` (metadata-only, no game launch required).
+`tools/check-harmony-targets.py` verifies that every documented Harmony target still resolves
+across the assembly set above (metadata-only, no game launch required), and with `--reconcile
+Scripts` also fails if the source contains a patch site the documented table does not cover.
