@@ -53,10 +53,40 @@ namespace MultiplayerStability
             }
         }
 
+        // THE FIX (v0.8.30, Codex round 34 -- conviction threshold met without waiting for the capture): in
+        // MP, partial-cache reuse is disabled outright -- the lookup ignores the target entity whose
+        // occupancy shaped the cached path (aiming previews feed the same cache), so it can hand ONE client
+        // a preview-polluted path cut at the enemy's occupied node, and delivery writes Caster.Position to
+        // that node: the reported same-tile landings. Exact hits (caster/origin/destination/target-checked)
+        // stay; vanilla recomputes when no exact match exists -- precisely Dark Heresy's newer shape, which
+        // removed this lookup entirely. Solo untouched. The diagnostic postfix stays as the fix's validator:
+        // a "partial-cache" source line in MP would mean the fix is not holding.
         [HarmonyPatch(typeof(PathfindingService), "FindPartialCachedPath",
             typeof(UnitMovementAgentBase), typeof(Vector3), typeof(Vector3), typeof(bool))]
         internal static class Partial_Patch
         {
+            private static bool s_loggedActive;
+
+            private static bool Prefix(ref object __result)
+            {
+                try
+                {
+                    if (!NetworkingManager.IsMultiplayer)
+                        return true;                             // solo: vanilla partial reuse untouched
+                    __result = null;
+                    if (!s_loggedActive)
+                    {
+                        s_loggedActive = true;
+                        MultiplayerStabilityMain.Log("[ChargeFix] Active -- partial charge-path cache reuse disabled in multiplayer (exact hits kept; unmatched paths recompute).");
+                    }
+                    return false;                                // no partial reuse: fall through to compute
+                }
+                catch (Exception)
+                {
+                    return true;                                 // fail-open: vanilla behaviour
+                }
+            }
+
             private static void Postfix(object __result)
             {
                 if (__result != null)

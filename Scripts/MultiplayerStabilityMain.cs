@@ -104,10 +104,11 @@
 //      UnitCommandBuffer.Tick mid-batch and residuals retried differently per peer -- with the sim write and
 //      all unrelated exceptions preserved. Also in 0.8.20: DialogRngFix Guard C wraps the THIRD convicted dialogue
 //      caller (HasNextUnselectedAnswers -- Solomorne fork; LeakDetector caught the draws proactively).
-//  22. CHARGE-PATH DIAGNOSTIC (ChargePathDiag.cs) -- log-only: charge-path resolutions logged with source
-//      (exact-cache/partial-cache/computed), caster/origin/dest/target + resolved final node. The PARTIAL
-//      cache lookup ignores the target entity and cuts a (possibly preview-polluted) cached path at the
-//      destination node -- suspected cause of the charge/parry same-tile desyncs; Dark Heresy removed it.
+//  22. CHARGE-PATH FIX + DIAGNOSTIC (ChargePathDiag.cs) -- v0.8.30: partial charge-path cache reuse is
+//      DISABLED in MP (the lookup ignores the target entity and cuts a possibly preview-polluted cached
+//      path at the destination node -- the charge/parry same-tile desyncs; Dark Heresy removed it). Exact
+//      target-checked hits kept; unmatched paths recompute; solo untouched. Resolution diagnostic stays
+//      armed as the validator (a partial-cache source line in MP = fix not holding).
 //  23. TACTICIAN DIAGNOSTIC (TacticianDiag.cs) -- log-only: every momentum event with delta + post-event
 //      remainder; MomentumThisCombat is OMITTED from its part hash, so remainder divergence is invisible
 //      until one peer crosses 100 and mints a one-sided buff. Origin of the split still unproven.

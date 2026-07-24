@@ -3,7 +3,7 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.29
+## 0.8.29–0.8.30
 - Two paired diagnostics for the charge/parry same-tile desyncs (tester: "my char and the enemy stood on the
   same tile"; `ChargeBuff` 12–13 ticks before both first mismatches): charge-path resolutions logged with
   cache source — the partial-cache lookup ignores the target entity and cuts a possibly preview-polluted
@@ -11,6 +11,12 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
   logged with delta + post-event remainder (the accumulator is omitted from its part hash, so divergence is
   invisible until a one-sided 100-crossing). Decisive evidence: a one-peer partial-cache hit ending on the
   target's node; the narrow fix would disable only partial-cache reuse in MP.
+- 0.8.30 — the charge-path FIX shipped (conviction threshold met without waiting for the capture): in MP,
+  partial charge-path cache reuse is disabled outright — exact (target-checked) hits kept, unmatched paths
+  recompute, solo untouched; matches Dark Heresy's newer implementation, which removed the lookup entirely.
+  The source diagnostic stays armed as the fix's validator (a `partial-cache` line in MP = not holding).
+  Also corrected: DashDeliveryFix's comment claiming delivery-tick skew "self-heals" — count-equal streams
+  re-align, but threshold-crossing accumulators (the Tactician remainder) can latch a skew permanently.
 
 ## 0.8.26–0.8.28
 - Trap/pause containment shipped (4.5-hour capture, evidence conclusive: 72-vs-10 trap NREs, 514-vs-107
