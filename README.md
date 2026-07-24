@@ -13,7 +13,8 @@ mod safely can, and makes co-op save transfers roughly **8× faster** over a dir
 
 - **Diagnosis** — every desync episode is logged with the diverged state bucket, per-tick RNG-stream
   fingerprints, entity/fact creation rings, and per-entity state hashes, so two machines' logs can be diffed
-  to the exact cause. A proactive leak detector flags out-of-tick hashed RNG draws on a single machine, no
+  to the diverging subsystem — and, for every class fixed so far, to the exact call site (one instrumented
+  single-entity fork remains open; see `EVIDENCE-MATRIX.md`). A proactive leak detector flags out-of-tick hashed RNG draws on a single machine, no
   desync required.
 - **Prevention** — root-cause fixes for confirmed desync classes: view-timed/hashed RNG leaks (weather,
   projectiles, dialogue previews, idle animations), client-local state reaching mechanics (fog gates, awake
@@ -34,8 +35,8 @@ mod safely can, and makes co-op save transfers roughly **8× faster** over a dir
 A session-latched compatibility gate (auto-fallback to vanilla on version mismatch) is planned for 0.9.
 Until then: same version, every machine, every session.
 
-Requires the Steam edition for fast transfers (GOG installs fall back to vanilla transfer speed but are
-otherwise fine). Coexists with UnityModManager mods (ToyBox, MicroPatches) — but remember those are subject
+Requires the Steam edition for fast transfers. On GOG the Steam transfer self-disables (vanilla transfer
+speed); the remaining components are expected to work by design but are **not field-tested on GOG**. Coexists with UnityModManager mods (ToyBox, MicroPatches) — but remember those are subject
 to the same lockstep rules; mismatched gameplay mods across peers cause their own desyncs.
 
 ## Install
@@ -48,7 +49,7 @@ to the same lockstep rules; mismatched gameplay mods across peers cause their ow
 
 ## Documentation
 
-Start with `UPSTREAM.md` — the engineering handoff overview.
+Start with `TECHNICAL-OVERVIEW.md` — the one-page engineering overview.
 
 - `PATCH-CATALOG.md` — canonical per-component inventory: every patch class, its targets, mechanism,
   peer-compatibility category, and exact evidence status.

@@ -64,7 +64,8 @@ sessions; never distribute on the strength of a Unity compile alone.
 
 Expected in `GameLogFull.txt`:
 
-- `[MPStability] [Init] Patches applied (39 classes)` with **no** `[Init][ERR]` lines;
+- `[MPStability] [Init] Patches applied (45 classes)` with **no** `[Init][ERR]` lines
+  (45 = the count of `[HarmonyPatch]`-annotated classes in v0.8.32 source);
 - transpiler swap counts: `[FogGate]` six lines, `[TimeScaleFix]` two, `[IdleRng]` four
   (counts 5/1/1/4), `[ProjectileFix]` one;
 - no `PATTERN NOT FOUND` lines.

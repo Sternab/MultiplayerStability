@@ -9,8 +9,9 @@ Compatibility categories: **subset-safe** (any subset of machines) · **negotiat
 every-peer-modded) · **exact-parity** (simulation-changing; identical build required on every machine
 until the 0.9 latch ships).
 
-Integration classes: **ENGINE** (root-cause fix Owlcat may want natively) · **DIAG** (diagnostic
-tooling) · **INFRA** (mod-only infrastructure).
+Defect-origin classes: **ENGINE** (root cause in engine code; the mod's intervention is a downstream
+workaround) · **DIAG** (diagnostic tooling) · **INFRA** (mod-only infrastructure). Each entry ends
+with a **root-cause note** locating the defect's origin; these are observations, not prescriptions.
 
 ---
 
@@ -25,8 +26,9 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** runs only through co-op-only seams; ack pump subset-safe, boost negotiated.
 - **Failure policy:** finalizer-balanced teardown; peer check fail-open to vanilla.
 - **Consequences:** none in solo; no simulation contact.
-- **Status:** Field validated (measured transfer-rate change; years of session use).
-- **Native recommendation:** pump acks off the frame clock during transfers; larger default window.
+- **Status:** Field validated (measured transfer-rate change across the session record).
+- **Root-cause note:** the transfer ceiling comes from the frame-clocked ack pump and the default
+  chunk/window constants, not from available bandwidth.
 
 ## C02 · Steam P2P save transfer — `SteamP2P.cs` + `SteamSaveTransfer.cs` · INFRA
 
@@ -41,8 +43,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Failure policy:** any failure/timeout → vanilla path; anti-spoof accept-list; main-thread pump.
 - **Status:** Field validated. Known 0.9 work: wire framing, ACK/NACK semantics, per-peer fallback
   (see `ROADMAP-0.9.md` items 2–3) — these are hardening gaps, not observed field failures.
-- **Native recommendation:** any first-party bulk channel; the mod's exists only because the relay is
-  rate-capped.
+- **Root-cause note:** this side channel exists only because the relay path is rate-capped; it adds
+  no capability beyond bulk-byte transport.
 
 ## C03 · DesyncWatch — `DesyncWatch.cs` · DIAG
 
@@ -71,8 +73,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   effect); exact-parity for MP effect.
 - **Status:** Field validated (post-fix captures show `Weather` bit-identical through long sessions;
   281 matching diagnostic records in the latest relevant capture).
-- **Native recommendation:** weather VFX should use a non-serialized stream (the engine already
-  maintains exactly such streams, e.g. `Visuals.Fx`).
+- **Root-cause note:** the engine already maintains non-serialized VFX streams (e.g. `Visuals.Fx`);
+  the defect is that this render-clocked call graph reaches the serialized `Weather` stream instead.
 
 ## C05 · ProjectileRngFix — `ProjectileRngFix.cs` · ENGINE
 
@@ -84,7 +86,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** always-on (low-impact solo change: fixed bone choice); exact-parity.
 - **Status:** Field validated (the class disappeared from captures after the fix; later geometry hole
   addressed by C15).
-- **Native recommendation:** aim-bone selection from a non-hashed stream, unconditionally.
+- **Root-cause note:** the draw itself is cosmetic (bone choice); the desync comes from its
+  *conditionality* on client-local view presence while it consumes a hashed stream.
 
 ## C06 · SequencedLocks — `SequencedLocks.cs` · INFRA
 
@@ -96,7 +99,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** negotiated (wire-format change; inert in mixed lobbies).
 - **Status:** Field validated (barriers complete in all multi-player captures since; the pre-fix hang
   shape not reproduced). 0.9 item 4 adds retry/abort.
-- **Native recommendation:** sequence numbers on lock announcements.
+- **Root-cause note:** the race exists because barrier announcements carry no sequence identity —
+  one reused `NetLockPointId` for every barrier.
 
 ## C07 · DeterministicSleep — `DeterministicSleep.cs` · ENGINE
 
@@ -119,8 +123,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   near-party units stay awake (small perf cost, measured acceptable).
 - **Status:** Field validated (census counts match exactly across peers in every capture since; the
   awake-set desync class — including the previously reproducible death-timing fork — has not recurred).
-- **Native recommendation:** decouple simulation scheduling from render culling (three activity tiers);
-  make the census a pure function of synchronized state.
+- **Root-cause note:** the defect is simulation scheduling being coupled to render culling; the mod's
+  census derives the same decisions from synchronized state only.
 
 ## C08 · FogGateFix — `FogGateFix.cs` · ENGINE
 
@@ -136,8 +140,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** MP-gated; exact-parity.
 - **Status:** aura-membership + combat-start sites Field validated (the capture-5 one-entity fork
   class has not recurred); the four later sites Mechanism confirmed; post-fix validation pending.
-- **Native recommendation:** mechanics must not read `IsInFogOfWar`/`IsVisibleForPlayer`; where a
-  visibility gate is intended, derive it from synchronized reveal state.
+- **Root-cause note:** the six sites are the mechanics-side reads of `IsInFogOfWar`/
+  `IsVisibleForPlayer` found so far; both flags are client-local by construction.
 
 ## C09 · DashDeliveryFix — `DashDeliveryFix.cs` · ENGINE
 
@@ -153,7 +157,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   skew — see C23).
 - **Status:** Mechanism confirmed; post-fix validation pending (no post-fix capture exercised Macabre
   Dance/Charge delivery specifically).
-- **Native recommendation:** deliver from simulation positions, never view transforms.
+- **Root-cause note:** the per-frame delivery poll is the one place this ability family reads a live
+  view transform; the precomputed target set it ignores is already simulation state.
 
 ## C10 · PreviewGhostFix — `PreviewGhostFix.cs` · ENGINE
 
@@ -170,8 +175,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Status:** fact-attach + aura exclusion Field validated (the "+N at combat start" uuid fork class
   gone; a later capture showed large preview builds with `GlobalUuid` remaining identical); the
   `Copy` scope extension Mechanism confirmed; post-fix validation pending.
-- **Native recommendation:** previews should never subscribe to gameplay events (or should live
-  entirely outside hashed streams by construction).
+- **Root-cause note:** the root condition is preview units subscribing to gameplay events and sharing
+  hashed streams with simulation; all three patched mechanisms are downstream of it.
 
 ## C11 · LeakDetector — `LeakDetector.cs` · DIAG
 
@@ -196,7 +201,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   exact-parity with the rest of the simulation-changing set.
 - **Status:** Field validated (post-fix capture: guard fired, `RuleSystem`/`GlobalUuid` stayed
   identical through the previously-forking scenario).
-- **Native recommendation:** same as C10 — previews out of gameplay event buses.
+- **Root-cause note:** same root condition as C10 — a preview unit's handlers living on the global
+  rulebook bus.
 
 ## C13 · LocalTimeScaleFix — `LocalTimeScaleFix.cs` · ENGINE
 
@@ -211,8 +217,9 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** MP-gated; exact-parity. Cost: hidden AI turns run at normal speed in co-op.
 - **Status:** Mechanism confirmed; post-fix validation pending (no `GameTime` fork has appeared since,
   but no targeted post-fix capture isolates this site).
-- **Native recommendation:** time-scale factors must be synchronized inputs (one factor already is —
-  `CameraFollowTimeScale` rides a command); Withdrawn approach documented in-file.
+- **Root-cause note:** one time-scale factor is already a synchronized input (`CameraFollowTimeScale`
+  rides a command); these two writers are the remaining client-local ones. The withdrawn approach is
+  documented in-file.
 
 ## C14 · DeterministicOrderFix — `DeterministicOrderFix.cs` · ENGINE
 
@@ -224,7 +231,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   the sibling `FindUnitsInShape` already does.
 - **Gate/category:** MP-gated; exact-parity (one-sided sorting *guarantees* order disagreement).
 - **Status:** Mechanism confirmed; post-fix validation pending.
-- **Native recommendation:** apply the existing `ByIdComparison` in `FindUnitsInRange` (one line).
+- **Root-cause note:** the engine's own sibling `FindUnitsInShape` already orders its results with
+  `ByIdComparison`; `FindUnitsInRange` is the unordered variant.
 
 ## C15 · ProjectilePositionFix — `ProjectilePositionFix.cs` · ENGINE
 
@@ -239,8 +247,9 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** MP-gated; exact-parity. Visual: projectiles aim at the base point (identical to
   vanilla's SnapMap-less behavior).
 - **Status:** Mechanism confirmed; post-fix validation pending.
-- **Native recommendation:** dual-position design — visual bones for rendering, deterministic
-  positions for mechanics (as in Solasta's engine, and consistent with Dark Heresy's direction).
+- **Root-cause note:** comparable lockstep engines separate visual bones (rendering) from
+  deterministic positions (mechanics) — observed in Solasta's engine and consistent with Dark
+  Heresy's direction; every fallback this fix takes is the engine's own no-view path.
 
 ## C16 · DialogRngFix — `DialogRngFix.cs` · ENGINE
 
@@ -260,8 +269,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Status:** Field validated (post-fix three-machine capture: both guards fired on all machines, zero
   `DialogSystem` divergence through dialogue-heavy sessions; the third guard validated by a later
   capture with no dialogue leaks).
-- **Native recommendation:** UI preview/inspection paths must not share RNG streams with simulation —
-  either non-hashed streams for previews or side-effect-free preview APIs.
+- **Root-cause note:** the defect shape is UI preview/inspection paths sharing hashed RNG streams
+  with simulation; the advancement path is already correct.
 
 ## C17 · IdleAnimationRngFix — `IdleAnimationRngFix.cs` · ENGINE
 
@@ -280,8 +289,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** MP-gated; exact-parity.
 - **Status:** Field validated (post-fix captures show no `Animation3` divergence; the transition-flap
   noise class stopped appearing).
-- **Native recommendation:** point the idle call graph at `AnimationIdle` (the stream already exists
-  for this purpose).
+- **Root-cause note:** `AnimationIdle` already exists as the engine's designated non-hashed idle
+  stream; the idle call graph simply maps to hashed `Animation3` instead.
 
 ## C18 · ActionBarRoleSpamFix — `ActionBarRoleSpamFix.cs` · ENGINE (defect) / UI-only
 
@@ -298,8 +307,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   main storm window; also raisable solo via cheats/`ForceSet`).
 - **Category:** UI-only; subset-safe.
 - **Status:** Field validated (post-fix capture: a real 2→1 departure produced zero exceptions).
-- **Native recommendation:** filter `HandleRoleSet` by `entityId`; null-guard unitless slots; cap the
-  log sink.
+- **Root-cause note:** `HandleRoleSet` receives an `entityId` parameter it does not use, and the log
+  sink is uncapped — both directly observable in the 600 MB field logs.
 
 ## C19 · WeatherCombatExitDiag — `WeatherCombatExitDiag.cs` · DIAG
 
@@ -336,7 +345,7 @@ tooling) · **INFRA** (mod-only infrastructure).
   `IkController`/`GrounderIk` skips the reset, logged). Failure routing: metadata drift latches back
   to vanilla; a real `ResetPosition` failure surfaces once, unwrapped; reimpl failures fall back to
   vanilla (idempotent writes); orientation `FieldRef` resolves in guarded `Prepare()` (patch declines
-  on rename). Owlcat's own sibling movement path performs the same IK null checks.
+  on rename). The engine's own sibling movement path performs the same IK null checks.
 - **Diagnostic contract:** paused-window breadcrumbs budgeted per accepted-Pause episode; unique
   `(tick, unit, seq)` record keys (per-tick per-unit ordinal dictionary); all exceptions logged and
   rethrown.
@@ -344,8 +353,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Status:** containment Mechanism confirmed; post-fix validation pending (no post-fix trap capture
   yet). Diagnostic Field validated as instrumentation (perfect cross-peer record match in a clean
   session).
-- **Native recommendation:** null-check the IK graph (as the sibling path does), or better: never run
-  view/IK work inside command `OnRun` between the sim write and `DidRun`.
+- **Root-cause note:** the defect window is view/IK work running inside command `OnRun` between the
+  sim write and `DidRun`; the engine's sibling movement path already null-checks the same IK graph.
 
 ## C21 · AugmentationBarkFix — `AugmentationBarkFix.cs` · ENGINE
 
@@ -359,8 +368,8 @@ tooling) · **INFRA** (mod-only infrastructure).
   — verified symmetric) are untouched everywhere. Cost: no augmentation-screen bark in co-op.
 - **Gate/category:** MP-gated; exact-parity.
 - **Status:** Mechanism confirmed; post-fix validation pending.
-- **Native recommendation:** UI-initiated cosmetic barks must not write `PlayedBanters` (or the write
-  must ride a synchronized command).
+- **Root-cause note:** `PlayedBanters` is in the synchronized player hash while this write originates
+  from a client-local screen — a one-sided write by construction.
 
 ## C22 · ChargePathDiag + fix — `ChargePathDiag.cs` · ENGINE (fix) + DIAG
 
@@ -382,8 +391,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Gate/category:** MP-gated; exact-parity.
 - **Status:** **Mechanism confirmed; post-fix validation pending** — the charge/attack/parry scenario
   has not yet been exercised on a build carrying the fix.
-- **Native recommendation:** adopt the Dark Heresy shape (remove the partial lookup; key full hits on
-  target identity).
+- **Root-cause note:** the Dark Heresy build of this engine no longer contains the partial lookup and
+  keys full-cache hits on target identity — the shape this fix approximates from the outside.
 
 ## C23 · TacticianDiag — `TacticianDiag.cs` · DIAG
 
@@ -398,7 +407,8 @@ tooling) · **INFRA** (mod-only infrastructure).
 - **Related audit:** the same base-only-hash omission exists in `MomentumReachedTrigger`,
   `HunterDodge`, `ChangeVeilDamage` (bounded hash audit queued; see `KNOWN-LIMITATIONS.md`).
 - **Status:** Diagnostic only.
-- **Native recommendation:** include gameplay-relevant accumulator state in component hashes.
+- **Root-cause note:** the accumulator is gameplay-relevant state omitted from the component hash;
+  the same omission pattern exists in three sibling components (see Related audit).
 
 ---
 

@@ -46,9 +46,13 @@ Honest inventory. Nothing here is hidden in file headers.
 - **LeakDetector blind spots:** off-thread draws (pathfinding), and any "view flag read by mechanics"
   leak that never passes through `Rand.Get`. Warning budget is per stream (startup noise can mute
   later sites) until 0.9 item 5.
-- **Reflection-based seams drift with game updates.** Every patch fails open with loud `[ERR]` /
-  `PATTERN NOT FOUND` lines; after any game patch the boot log must be checked (see `TESTING.md`).
-  `tools/check-harmony-targets.py` verifies target resolution against a given `Code.dll` offline.
+- **Reflection-based seams drift with game updates — and fail-open is best-effort, patch-site-local.**
+  Isolation is per patch class: a failing class logs `[Init][ERR]` and stays inert while others
+  continue, so a component spanning several classes — or a class whose targets partially resolve —
+  can be left **partially active** (the boot message's "component inert" wording refers to the failed
+  patch class, not the whole component). Runtime guards fall back to the vanilla path at their own
+  site with loud `[ERR]` / `PATTERN NOT FOUND` lines. After any game patch the boot log must be
+  checked (see `TESTING.md`); `tools/check-harmony-targets.py` verifies target resolution offline.
 - **The census replaces a vanilla pass.** `DeterministicSleep` replicates vanilla's ambient verdict
   verbatim; that replica must be re-diffed against `SleepingUnitsController.ShouldBeSleeping` after
   every game update.

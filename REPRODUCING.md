@@ -19,7 +19,7 @@ smoke tests) on the **identical** mod build.
 
 Expected in each machine's log after launch:
 
-- `[MPStability] [Init] Patches applied (39 classes)` and **no** `[Init][ERR]` lines.
+- `[MPStability] [Init] Patches applied (45 classes)` and **no** `[Init][ERR]` lines.
 - Transpiler counts: `[FogGate]` six site lines; `[TimeScaleFix]` ×2; `[IdleRng]` ×4 (counts 5/1/1/4);
   `[ProjectileFix]` swap line.
 - No `PATTERN NOT FOUND` lines (each means that one site reverted to vanilla).

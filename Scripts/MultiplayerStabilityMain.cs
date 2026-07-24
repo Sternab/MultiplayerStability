@@ -21,8 +21,9 @@
 // Doctrine (KNOWN-LIMITATIONS.md has the full statement):
 //   - No auto-resync, ever: desync recovery stays the player's explicit choice; this mod diagnoses
 //     and prevents, it never forces reloads.
-//   - Fail-open: every patch class is isolated -- a failed patch logs [Init][ERR] and reverts that
-//     component to vanilla; a runtime guard failure routes to vanilla behavior, never to a new throw.
+//   - Best-effort fail-open: patching is isolated per class -- a failed class logs [Init][ERR] and stays
+//     inert while the rest continue, so a component spanning several classes or targets can be left
+//     partially active (KNOWN-LIMITATIONS.md); runtime guards fall back to the vanilla path at their site.
 //   - Solo-safe: simulation-changing behavior is MP-gated; solo play takes the vanilla paths.
 //   - Instrument before fixing: prevention fixes ship only after captures (or engine-source proof)
 //     name the mechanism; log-only diagnostics do the naming.
@@ -67,6 +68,8 @@ namespace MultiplayerStability
                 catch (System.Exception e)
                 {
                     failed++;
+                    // "component inert" here means THIS PATCH CLASS is inert; a component built from
+                    // several patch classes can be left partially active (see KNOWN-LIMITATIONS.md).
                     Log("[Init][ERR] patch class " + type.Name + " failed (component inert, others unaffected): " + e.Message);
                 }
             }
