@@ -1,0 +1,144 @@
+// Charge-path cache DIAGNOSTIC -- log-only (Codex round 33; tester report: "charged, attacked, he parried,
+// desync -- my char and the enemy stood on the SAME TILE"; ChargeBuff appeared 12-13 ticks before both
+// first mismatches).
+//
+// Suspected mechanism (decompile-verified): PathfindingService.FindPathChargeTB_Blocking (:727) tries
+// FindFullCachedPath, then FindPartialCachedPath, then ComputeAndCachePath. The PARTIAL lookup matches on
+// caster + origin + ignoreBlockers ONLY -- no destination key and NO TARGET ENTITY -- then finds the
+// destination as a node INDEX inside a cached path and cuts there. Local aiming PREVIEWS feed the same
+// cache, so a path cached under different target occupancy can be cut at the enemy's occupied node and
+// reused on the CONTROLLING client only; charge delivery then unconditionally writes
+// context.Caster.Position = lastNode.Vector3Position (AbilityCustomDirectMovement :313) -> caster lands ON
+// the target's tile on one peer: exactly the reported symptom. Corroboration: Dark Heresy's newer engine
+// REMOVED the partial lookup entirely and requires target-identity match on full-cache hits
+// (DH PathfindingService :713).
+//
+// This logs every charge-path resolution in MP with its SOURCE (exact-cache / partial-cache / computed),
+// caster, origin/destination, target id+position, and the resolved path's final node position (read
+// reflectively -- GraphNode lives in the A* assembly). The decisive two-sided evidence: a PARTIAL-cache hit
+// on one peer (computed/exact on the other) whose final node sits on the target's position. If confirmed,
+// the narrow fix is disabling ONLY partial-cache reuse in MP (Dark Heresy's shape). NOT a fix yet.
+// Log-only -> subset-safe; MP-gated; charges are rare, so every call logs.
+using System;
+using System.Collections;
+using System.Reflection;
+using HarmonyLib;
+using Kingmaker;
+using Kingmaker.EntitySystem.Entities;
+using Kingmaker.EntitySystem.Entities.Base;
+using Kingmaker.Networking;
+using Kingmaker.Pathfinding;
+using Kingmaker.View;
+using UnityEngine;
+
+namespace MultiplayerStability
+{
+    internal static class ChargePathDiag
+    {
+        private static string s_lastSource = "none";
+
+        private static void Note(string source)
+        {
+            s_lastSource = source;
+        }
+
+        [HarmonyPatch(typeof(PathfindingService), "FindFullCachedPath",
+            typeof(UnitMovementAgentBase), typeof(Vector3), typeof(Vector3), typeof(bool), typeof(MechanicEntity))]
+        internal static class Full_Patch
+        {
+            private static void Postfix(object __result)
+            {
+                if (__result != null)
+                    Note("exact-cache");
+            }
+        }
+
+        [HarmonyPatch(typeof(PathfindingService), "FindPartialCachedPath",
+            typeof(UnitMovementAgentBase), typeof(Vector3), typeof(Vector3), typeof(bool))]
+        internal static class Partial_Patch
+        {
+            private static void Postfix(object __result)
+            {
+                if (__result != null)
+                    Note("partial-cache");
+            }
+        }
+
+        [HarmonyPatch(typeof(PathfindingService), "ComputeAndCachePath",
+            typeof(UnitMovementAgentBase), typeof(Vector3), typeof(Vector3), typeof(bool), typeof(MechanicEntity))]
+        internal static class Computed_Patch
+        {
+            private static void Postfix(object __result)
+            {
+                if (__result != null)
+                    Note("computed");
+            }
+        }
+
+        [HarmonyPatch(typeof(PathfindingService), nameof(PathfindingService.FindPathChargeTB_Blocking),
+            typeof(UnitMovementAgentBase), typeof(Vector3), typeof(Vector3), typeof(bool), typeof(MechanicEntity))]
+        internal static class Entry_Patch
+        {
+            private static void Prefix()
+            {
+                s_lastSource = "none";
+            }
+
+            private static void Postfix(UnitMovementAgentBase agent, Vector3 origin, Vector3 destination,
+                object targetEntity, object __result)
+            {
+                try
+                {
+                    if (!NetworkingManager.IsMultiplayer)
+                        return;
+                    var sb = new System.Text.StringBuilder(224);
+                    sb.Append("[ChargeDiag] path source=").Append(s_lastSource)
+                      .Append(" tick=").Append(Game.Instance.RealTimeController.CurrentNetworkTick)
+                      .Append(" caster=").Append(agent != null && agent.Unit != null ? agent.Unit.UniqueId : "?")
+                      .Append(" origin=").Append(origin.ToString("F1"))
+                      .Append(" dest=").Append(destination.ToString("F1"));
+                    var target = targetEntity as Entity;
+                    sb.Append(" target=").Append(target != null ? target.UniqueId : "null");
+                    try
+                    {
+                        if (target != null)
+                        {
+                            var posProp = AccessTools.Property(target.GetType(), "Position");
+                            var pos = posProp != null ? posProp.GetValue(target) : null;
+                            if (pos is Vector3 v)
+                                sb.Append(" targetPos=").Append(v.ToString("F1"));
+                        }
+                    }
+                    catch (Exception) { sb.Append(" targetPos=?"); }
+                    sb.Append(" pathEnd=").Append(PathEnd(__result));
+                    MultiplayerStabilityMain.Log(sb.ToString());
+                }
+                catch (Exception)
+                {
+                    // log-only diagnostic: never interfere
+                }
+            }
+        }
+
+        // The path node list references the A* assembly -- walk it reflectively: __result.path is a
+        // List<GraphNode>; the last node's Vector3Position is the landing point delivery will write.
+        private static string PathEnd(object path)
+        {
+            try
+            {
+                if (path == null)
+                    return "null";
+                var nodes = AccessTools.Field(path.GetType(), "path")?.GetValue(path) as IList;
+                if (nodes == null || nodes.Count == 0)
+                    return "empty";
+                var last = nodes[nodes.Count - 1];
+                var pos = AccessTools.Property(last.GetType(), "Vector3Position")?.GetValue(last);
+                return pos is Vector3 v ? v.ToString("F1") : "?";
+            }
+            catch (Exception)
+            {
+                return "?";
+            }
+        }
+    }
+}
