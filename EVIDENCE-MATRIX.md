@@ -5,6 +5,10 @@ three-sided) `GameLogFull` pairs held **outside** Git by the field-test lead; sa
 where useful. *Direct observation* means the mechanism was read from capture data; *source inference*
 means it was established from the decompiled implementation and is marked as such.
 
+For the strongest convictions, `EVIDENCE-EXCERPTS.md` in the companion investigation repository
+(shipped alongside this one in the handoff package) carries verbatim log extracts plus the SHA-256 of
+every raw capture file, so those claims are auditable without the multi-GB logs.
+
 Statuses match `PATCH-CATALOG.md` (strict vocabulary).
 
 | # | Symptom | Context / repro | First divergence | Evidence | Capture | Vanilla chain | Fix (component, version) | Post-fix validation | Residual uncertainty |
