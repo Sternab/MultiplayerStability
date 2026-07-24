@@ -48,13 +48,23 @@ to the same lockstep rules; mismatched gameplay mods across peers cause their ow
 
 ## Documentation
 
-- `CHANGELOG.md` — curated release history with the investigation findings behind each fix.
-- `COMPATIBILITY.md` — tested game builds, player counts, platform notes.
-- `BUILDING.md` — how to build from source (Unity + the Owlcat modification template).
+Start with `UPSTREAM.md` — the engineering handoff overview.
 
-The underlying investigation (engine analysis, capture forensics, hazard registry) lives in the project's
-research notes and is summarized in each source file's header — the headers are intentionally verbose; they
-are the primary documentation of *why* each patch exists and what evidence supports it.
+- `PATCH-CATALOG.md` — canonical per-component inventory: every patch class, its targets, mechanism,
+  peer-compatibility category, and exact evidence status.
+- `EVIDENCE-MATRIX.md` — claim-by-claim mapping to the field captures and source analysis behind each fix.
+- `KNOWN-LIMITATIONS.md` — the honest boundary: what is not fixed, not proven, or out of scope.
+- `REPRODUCING.md` — boot health check, per-component verification procedures, two-sided capture protocol.
+- `TESTING.md` — verification that exists today and the automated-test plan.
+- `BUILDING.md` — reproducible build from source (Unity + the Owlcat modification template).
+- `COMPATIBILITY.md` — tested vs design-only status per game build, player count, and platform.
+- `ROADMAP-0.9.md` — the frozen 0.9 plan (session compatibility latch first).
+- `HANDOFF-MANIFEST.md` — exact artifact identity: package/DLL/reference-assembly SHA-256 hashes.
+- `CHANGELOG.md` — curated release history with the investigation findings behind each fix.
+
+Each source file's header carries that component's detailed rationale; `PATCH-CATALOG.md` is the index
+over them. The underlying investigation (engine analysis, capture forensics, hazard registry) lives in a
+separate research repository; the capture evidence each claim rests on is cited in `EVIDENCE-MATRIX.md`.
 
 ## License
 
