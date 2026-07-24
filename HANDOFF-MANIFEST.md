@@ -1,7 +1,7 @@
 # Handoff Manifest — MultiplayerStability v0.8.32
 
-Exact identity of the **v0.8.32 review build** (the bytes the tester group ran) and of the source
-delivered for review. Per-component validation status lives in `PATCH-CATALOG.md`; several shipped
+Exact identity of the **v0.8.32 review artifact** (built from the tagged source; this exact build
+has not completed post-fix field validation) and of the source delivered for review. Per-component validation status lives in `PATCH-CATALOG.md`; several shipped
 fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 
 ## Source identity
@@ -9,9 +9,12 @@ fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 | Item | Value |
 |---|---|
 | Mod source: build tag | `3ab7a4a` = tag `v0.8.32` — the exact source the packaged DLL was built from |
-| Mod source: review snapshot | the checked-out tree; its delta from the build tag is documentation and
-  comments only — verify with `git diff v0.8.32..HEAD` plus the comment-stripped source check |
-| Docs repository: build tag | `bb678d1` = tag `docs-v0.8.32`; review snapshot likewise documentation-only ahead |
+| Mod source: review head | `c294d51` plus this documentation-pass commit — a committed file cannot
+  contain its own commit hash, so the resolved head is stamped at packaging time in
+  `SNAPSHOT-COMMIT.txt` and the outer `README-HANDOFF.md`. Delta from the build tag is documentation
+  and comments only — verify with `git diff v0.8.32..HEAD` plus the comment-stripped source check |
+| Docs repository: build tag | `bb678d1` = tag `docs-v0.8.32` |
+| Docs repository: review head | `cafa25c` (documentation-only ahead of its build tag) |
 | Manifest `UniqueName` / `Version` | `MultiplayerStability` / `0.8.32` |
 | Source files | 25 `.cs` (23 numbered components) + Unity `.meta`, manifest, localization, docs |
 

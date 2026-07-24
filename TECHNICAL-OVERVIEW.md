@@ -7,13 +7,15 @@ One page. Everything else links from here.
 A field-driven investigation of Rogue Trader co-op desyncs, packaged as an OwlcatModification
 (Harmony). Across instrumented two- and three-player sessions it identified, and where safely
 possible fixed, systematic violations of the lockstep contract: client-local state reaching the
-synchronized simulation. **v0.8.32 is the review build** — the exact bytes the tester group ran.
+synchronized simulation. **v0.8.32 is the review artifact, built from the tagged source**; this
+exact build has not completed post-fix field validation.
 Per-component validation status is tracked individually in `PATCH-CATALOG.md`;
 `HANDOFF-MANIFEST.md` holds the exact artifact identity.
 
 ## The one-sentence thesis
 
-The engine's lockstep is sound; its enforcement is incomplete — the recurring defect shape is
+Working hypothesis, consistent with everything observed on game build `1.6.1.514`: the lockstep
+design is sound and its enforcement is incomplete — the recurring defect shape is
 **client-local input (fog, camera, render visibility, view objects/bones, UI refresh timing, Unity
 physics/trigger callbacks, cache pollution from aiming previews) feeding hashed simulation state** —
 and every fix here either severs one such path or makes the affected decision derive from

@@ -3,10 +3,12 @@
 ## Game builds
 
 Developed and **field-tested against Warhammer 40,000: Rogue Trader `1.6.1.514` (Steam)** with the
-reference assemblies hashed in `HANDOFF-MANIFEST.md`. Every Harmony target is fail-open: after a game
-patch, a missing target logs `[Init][ERR]` / `[ERR] ... not found` / `PATTERN NOT FOUND` at boot and
-that component reverts to vanilla instead of crashing. **Check the boot log after every game update**,
-and run `tools/check-harmony-targets.py` against the updated `Code.dll`.
+reference assemblies hashed in `HANDOFF-MANIFEST.md`. Patch installation is best-effort and per
+patch class: after a game patch, a missing target logs `[Init][ERR]` / `[ERR] ... not found` /
+`PATTERN NOT FOUND` at boot and the affected patch class stays inert while the rest continue — a
+component spanning several classes can be left partially active (`KNOWN-LIMITATIONS.md`). **Check
+the boot log after every game update**, and run `tools/check-harmony-targets.py` against the
+updated assemblies (standard set in the tool header).
 
 ## Player counts
 
