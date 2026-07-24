@@ -1,0 +1,67 @@
+# MultiplayerStability — Orientation for Owlcat Engineers
+
+One page. Everything else links from here.
+
+## What this is
+
+A field-driven investigation of Rogue Trader co-op desyncs, packaged as an OwlcatModification
+(Harmony). Over ~150 hours of instrumented two- and three-player sessions it identified, and where
+safely possible fixed, systematic violations of the lockstep contract: client-local state reaching the
+synchronized simulation. **v0.8.32 is the frozen, field-tested baseline** — see `HANDOFF-MANIFEST.md`
+for exact identity.
+
+## The one-sentence thesis
+
+The engine's lockstep is sound; its enforcement is incomplete — the recurring defect shape is
+**client-local input (fog, camera, render visibility, view objects/bones, UI refresh timing, Unity
+physics/trigger callbacks, cache pollution from aiming previews) feeding hashed simulation state**, and
+every fix here either severs one such path or makes the affected decision derive from synchronized
+state.
+
+## What you probably care about most
+
+1. **`PATCH-CATALOG.md`** — all 23 components: target methods, mechanism, vanilla defect, fix behavior,
+   validation status, and a *recommended native solution* per item (often simpler than the Harmony
+   containment — e.g. Dark Heresy already removed the charge-path partial cache this mod disables).
+2. **`EVIDENCE-MATRIX.md`** — symptom → mechanism → fix → validation traceability with capture
+   references and first-divergent-tick data.
+3. **`KNOWN-LIMITATIONS.md`** — what is *not* proven, untested configurations, and open
+   investigations (two instrumented-but-unfixed classes ship in this build as log-only diagnostics).
+
+## Categories at a glance
+
+- **Engine-integration candidates** (root-cause fixes you may want natively): weather RNG (2 classes),
+  projectile RNG + geometry, dialogue UI RNG (3 call sites), idle-animation RNG stream selection,
+  awake-census determinism, fog-gated mechanics reads (6 sites), local time-scale writers, physics-order
+  determinism, preview-unit isolation (3 mechanisms), charge-path partial cache, paused-command IK NRE,
+  bark/`PlayedBanters` UI write, preview-copy RNG scope.
+- **Diagnostic tooling** (valuable during any native fix work): out-of-tick hashed-RNG leak detector,
+  per-bucket desync attribution + RNG/entity fingerprint rings, and three armed scoped diagnostics.
+- **Mod-only infrastructure** (not for integration): Steam P2P save-transfer side channel, Photon
+  ack-pump, sequenced loading barriers, per-class patch isolation.
+
+## Ground rules this project follows
+
+- **No auto-resync** — recovery stays the player's choice; the mod diagnoses and prevents.
+- **Fail-open** — every patch falls back to vanilla on any unexpected condition.
+- **Solo-safe** — multiplayer-gated behavior; solo is vanilla (two narrow, documented exceptions).
+- **Evidence discipline** — a fix is only called *field validated* after a post-fix two-sided capture;
+  statuses in the catalog use a strict vocabulary.
+
+## Reproduction & verification
+
+`REPRODUCING.md` has per-issue procedures (including the charge/parry same-tile scenario and the
+diagnostic log contracts). `TESTING.md` describes current verification and the automated-test plan.
+`BUILDING.md` is a clean-room build guide against Unity `6000.0.64f1` and the hashed reference
+assemblies.
+
+## What comes next (not in this build)
+
+`ROADMAP-0.9.md` — a frozen five-part hardening series (session-latched peer compatibility, P2P wire
+framing, transfer ACK/NACK, barrier retry/abort, inference conservatism). No new gameplay fixes ride in
+that series.
+
+## Contact
+
+Author: **Sternab** (mod author / field-test lead). Repository commits and package checksums in
+`HANDOFF-MANIFEST.md` are the canonical identity for any question about "which build."
