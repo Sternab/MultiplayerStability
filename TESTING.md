@@ -2,10 +2,12 @@
 
 ## What verification exists today
 
-1. **Offline target-resolution smoke test** — `tools/check-harmony-targets.py` (metadata-only, runs
-   against a `Code.dll` without launching anything): verifies every documented Harmony target
-   (type + method + signature) still exists, and reports per patch class. Run it after every game
-   update and before every build. It cannot detect runtime inlining or IL-pattern drift.
+1. **Offline target-resolution smoke test** — `tools/check-harmony-targets.py` (metadata-only, no
+   game launch): verifies the documented target set — 52 type+method(+signature) rows covering all
+   23 components — still exists in the assemblies you pass (standard set in the tool header), and
+   reports per patch class. Run it after every game update and before every build. It cannot detect
+   runtime inlining or IL-pattern drift, and it checks the documented set, not literally every
+   reflected call inside every patch.
 2. **Package verification** — `tools/verify-package.ps1`: manifest version, DLL presence/freshness,
    required folders (including `Blueprints/`), and SHA-256 comparison against
    `HANDOFF-MANIFEST.md`.

@@ -1,29 +1,89 @@
-# Building from source
+# Building from source — reproducible procedure
+
+Verified against the v0.8.32 baseline (`HANDOFF-MANIFEST.md` holds all hashes referenced here).
 
 ## Prerequisites
-- Unity (the version pinned by Owlcat's `WhRtModificationTemplate`) with the template project set up per
-  Owlcat's modding documentation.
-- This repository checked out at `Assets/Modifications/MultiplayerStability` inside the template project.
 
-## Build
-1. Open the template project in Unity.
-2. Ensure `MultiplayerStability.asset` (the OwlcatModification manifest) shows the intended `Version`.
-3. Build the modification via the template's build pipeline (Owlcat modification build menu). The build
-   output installs to
-   `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader\Modifications\MultiplayerStability`.
-4. **Verify the deploy is fresh** — a stale DLL has cost entire test sessions:
-   - check the DLL's timestamp under `Modifications\MultiplayerStability\Assemblies\`;
-   - launch and confirm `[MPStability] [Init] Patches applied (N classes)` with no `FAILED`, plus the
-     per-component arming lines (`[FogGate] ... site(s)`, `[TimeScaleFix]`, `[IdleRng]` ×4, etc.).
+| Requirement | Exact value |
+|---|---|
+| Unity editor | **6000.0.64f1** |
+| Project | Owlcat's `WhRtModificationTemplate` (the official Rogue Trader modification template), set up per Owlcat's modding documentation |
+| Reference assemblies | in the template's `Assets/RogueTraderAssemblies/` — verify: `Code.dll` SHA-256 `33002BB397EB044C3C2425F1342C5C21671023EA1989A7594B573E3879A33420`; `0Harmony.dll` SHA-256 `9611251F080E4855CD9D5FA54B5E56034DF25B70B374C49BA09550B08A1BF875` |
+| Game (for runtime verification) | Warhammer 40,000: Rogue Trader `1.6.1.514` (Steam) |
 
-## Known packaging nuance
-The deployed package must contain a `Blueprints` directory (even empty) — the OwlcatModification loader
-logs a startup exception when it is missing. The source tree tracks `Blueprints/README.txt` for this reason;
-if a build/deploy drops empty directories, recreate `Modifications\MultiplayerStability\Blueprints` in the
-deployed folder.
+Any template location works; no path in this repository assumes a particular drive or folder.
+
+## Repository placement
+
+Clone/check out this repository at:
+
+```
+<template project root>/Assets/Modifications/MultiplayerStability
+```
+
+(The template's own `.gitignore` excludes `Assets/Modifications/*`, so this nested repository does not
+conflict with the template's version control.)
+
+## Compile ≠ package ≠ install — three distinct steps
+
+This distinction has caused real field incidents; treat each step as separate and verify it.
+
+1. **Compile:** opening the project makes Unity compile the scripts into the editor's script
+   assemblies. This alone produces **no** distributable.
+2. **Package:** run the template's Owlcat modification build (Unity menu:
+   **Modifications → Build** — select `MultiplayerStability`). Output:
+   `<template project root>/Build/MultiplayerStability.zip` containing
+   `OwlcatModificationManifest.json`, `OwlcatModificationSettings.json`,
+   `Assemblies/MultiplayerStability.dll`, `Blueprints/`, `Bundles/…BlueprintDirectReferences`,
+   `Content/`, `Localization/enGB.json`.
+3. **Install:** extract the package to
+   `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader\Modifications\MultiplayerStability`
+   and enable the mod in the in-game mod manager.
+
+## `Blueprints/` directory
+
+The Owlcat loader logs a startup exception if the installed mod lacks a `Blueprints` directory (even
+empty). The source tree tracks `Blueprints/README.txt` and the v0.8.32 package contains the directory
+entry; if a future packaging pass drops empty directories, recreate `Blueprints/` in the installed
+folder.
+
+## Verify every build (the stale-artifact discipline)
+
+```powershell
+# package identity
+Get-FileHash Build\MultiplayerStability.zip -Algorithm SHA256
+# inside the zip / installed folder:
+#   manifest "Version" must equal MultiplayerStability.asset's Version
+#   Assemblies\MultiplayerStability.dll timestamp must postdate your last source edit
+```
+
+`tools/verify-package.ps1` automates this (see `TESTING.md`). A stale DLL has cost entire field
+sessions; never distribute on the strength of a Unity compile alone.
+
+## Runtime verification (first launch after any build or game update)
+
+Expected in `GameLogFull.txt`:
+
+- `[MPStability] [Init] Patches applied (39 classes)` with **no** `[Init][ERR]` lines;
+- transpiler swap counts: `[FogGate]` six lines, `[TimeScaleFix]` two, `[IdleRng]` four
+  (counts 5/1/1/4), `[ProjectileFix]` one;
+- no `PATTERN NOT FOUND` lines.
+
+Runtime arming lines appear on first qualifying events (full list in `REPRODUCING.md`).
+
+## Clean rebuild after stale artifacts
+
+1. Close Unity. Delete `Build/MultiplayerStability.zip`.
+2. Reopen the project (recompile), run the modification build again.
+3. Re-verify: zip timestamp, manifest version, DLL timestamp/hash, then reinstall.
 
 ## Release discipline
-- Bump `Version` in `MultiplayerStability.asset` for every behavior change (review history stays unambiguous).
-- Every simulation-changing release must ship to **all** peers together (see `COMPATIBILITY.md`).
-- Field evidence bar: a prevention fix is "validated" only after a clean two-sided session capture on the
-  scenario it fixes — static "it compiles and loads" is never claimed as fixed.
+
+- Bump `Version` in `MultiplayerStability.asset` for every behavior change.
+- Every simulation-changing release ships to **all** peers together (`COMPATIBILITY.md`).
+- Evidence bar: a prevention fix is *field validated* only after a post-fix two-sided capture on the
+  scenario it fixes (`PATCH-CATALOG.md` statuses; "compiles and loads" is never a validation claim).
+- After a game update: run `tools/check-harmony-targets.py` against the updated assemblies
+  (standard set in the tool header), then do the
+  runtime verification above; re-diff `DeterministicSleep`'s replicated vanilla verdict against
+  `SleepingUnitsController.ShouldBeSleeping`.

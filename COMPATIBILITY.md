@@ -1,32 +1,49 @@
 # Compatibility
 
 ## Game builds
-Developed and tested against the live Steam build of *Warhammer 40,000: Rogue Trader* as of July 2026
-(engine source cross-checked against a decompile refreshed 2026-06-25). Every Harmony target is fail-open:
-after a game patch, a missing target logs `[ERR] ... not found` / `PATTERN NOT FOUND` at boot and that
-component reverts to vanilla behavior instead of crashing. **Check the log after every game update.**
+
+Developed and **field-tested against Warhammer 40,000: Rogue Trader `1.6.1.514` (Steam)** with the
+reference assemblies hashed in `HANDOFF-MANIFEST.md`. Every Harmony target is fail-open: after a game
+patch, a missing target logs `[Init][ERR]` / `[ERR] ... not found` / `PATTERN NOT FOUND` at boot and
+that component reverts to vanilla instead of crashing. **Check the boot log after every game update**,
+and run `tools/check-harmony-targets.py` against the updated `Code.dll`.
 
 ## Player counts
-- 2 players: extensively field-tested (the primary development configuration).
-- 3 players: field-tested (transfer, barriers, and all seams verified in session captures).
-- 4–6 players: supported by design (engine cap is 6; all fixes are player-count-agnostic; save transfer is
-  sequential per peer at ~8 s each) — not yet field-tested.
+
+| Configuration | Status |
+|---|---|
+| 2 players (Steam) | **Field tested** — the primary configuration; extensive session record |
+| 3 players (Steam) | **Field tested** — real sessions incl. transfers, barriers, and desync captures |
+| 4–6 players | **Design-only** — all components are player-count-agnostic and the engine caps at 6; save transfer is sequential (~8 s per additional peer). No field record |
 
 ## Platform
-- **Steam (both/all peers):** full functionality including fast P2P save transfer.
-- **GOG (any peer):** fast transfer disables itself (Steam networking unavailable); everything else works.
-  Transfers fall back to vanilla Photon speed.
+
+| Configuration | Status |
+|---|---|
+| Steam, all peers | **Field tested** — full functionality including the fast P2P transfer |
+| GOG (any peer) | **Design-only** — the Steam transfer self-disables (fallback to vanilla Photon speed); everything else is expected to work. No field record |
 
 ## Version mixing
-See the peer-compatibility table in `README.md`. Until the 0.9 session-latched gate ships: **identical mod
-version on every machine.** The mod's own peer check matches mod *identity*, not version — a mixed-version
-lobby will not warn you.
+
+See the peer-compatibility categories in `PATCH-CATALOG.md`. Until the 0.9 session-latched gate
+ships: **identical mod version on every machine.** The mod's own peer check matches mod *identity*,
+not version — a mixed-version lobby will not warn you. Mixed installs of simulation-changing fixes
+range from ineffective to actively desync-causing.
 
 ## Other mods
-- Coexists with OwlcatModification and UnityModManager mods (tested alongside ToyBox, MicroPatches, and the
-  Deathwatch chargen mod in solo).
-- Any *gameplay-affecting* mod must itself be installed identically on all peers — lockstep applies to the
-  whole process, not just this mod. Content mods with client-side-only behavior (UI, cosmetics) are fine
-  asymmetric.
-- Known interop note: units whose weapon views differ across machines (e.g. from asymmetric content mods)
-  can desync via the engine's own view-dependent projectile paths — symmetric installs avoid this.
+
+- Coexists with OwlcatModification and UnityModManager mods (field record includes ToyBox and
+  MicroPatches running alongside; exact third-party versions per capture are recorded in the
+  evidence archive).
+- Any *gameplay-affecting* mod must itself be installed identically on all peers — lockstep applies
+  to the whole process. Client-side-only UI/cosmetic mods are fine asymmetric.
+- Known interop hazard for content mods: units whose weapon/view assets differ across machines can
+  desync via the engine's own view-dependent projectile paths — symmetric installs avoid this.
+- The vanilla lobby mod list is a boot-time snapshot of `ActiveUMMItemsInfo.txt`; externally-loaded
+  UMM mods appear only as a boolean flag. Do not rely on it for parity auditing.
+
+## DLC
+
+Peers with different DLC ownership have been observed intersecting cleanly (9-vs-7 → 7) in field
+sessions; the lobby handles this natively. Recorded as observed behavior, not a guarantee for all
+DLC combinations.
