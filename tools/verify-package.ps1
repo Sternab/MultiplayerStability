@@ -24,7 +24,25 @@ if ($isZip) {
     }
     $work = Join-Path $env:TEMP ("mpsverify_" + [IO.Path]::GetRandomFileName())
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($Path, $work)
+    # Extract per entry: the Owlcat build zip starts with a bare "/" root entry, which
+    # ExtractToDirectory's traversal guard rejects wholesale. Directory entries are preserved
+    # (the empty Blueprints/ entry is load-bearing for the loader-exception check below).
+    New-Item -ItemType Directory -Force $work | Out-Null
+    $workFull = (Get-Item $work).FullName.TrimEnd('\') + '\'
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        foreach ($e in $zip.Entries) {
+            if ($e.FullName -eq "/" -or $e.FullName -eq "") { continue }
+            $dest = [IO.Path]::GetFullPath((Join-Path $work ($e.FullName -replace '/', '\')))
+            if (-not $dest.StartsWith($workFull, [StringComparison]::OrdinalIgnoreCase)) {
+                Fail "zip entry escapes destination: $($e.FullName)"; continue
+            }
+            if ($e.Name -eq "") { New-Item -ItemType Directory -Force $dest | Out-Null; continue }
+            $dir = Split-Path $dest
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dest, $true)
+        }
+    } finally { $zip.Dispose() }
 }
 
 $manifest = Join-Path $work "OwlcatModificationManifest.json"
