@@ -9,12 +9,12 @@ fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 | Item | Value |
 |---|---|
 | Mod source: build tag | `3ab7a4a` = tag `v0.8.32` — the exact source the packaged DLL was built from |
-| Mod source: review head | `c294d51` plus this documentation-pass commit — a committed file cannot
+| Mod source: review head | `2a935b5` plus this identity-stamp commit — a committed file cannot
   contain its own commit hash, so the resolved head is stamped at packaging time in
   `SNAPSHOT-COMMIT.txt` and the outer `README-HANDOFF.md`. Delta from the build tag is documentation
   and comments only — verify with `git diff v0.8.32..HEAD` plus the comment-stripped source check |
 | Docs repository: build tag | `bb678d1` = tag `docs-v0.8.32` |
-| Docs repository: review head | `cafa25c` (documentation-only ahead of its build tag) |
+| Docs repository: review head | `03fd08f` (documentation-only ahead of its build tag) |
 | Manifest `UniqueName` / `Version` | `MultiplayerStability` / `0.8.32` |
 | Source files | 25 `.cs` (23 numbered components) + Unity `.meta`, manifest, localization, docs |
 
