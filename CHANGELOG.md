@@ -3,7 +3,7 @@
 Versions below are milestones; point releases between them were review/build iterations. Every prevention
 fix was driven by a two-sided log capture or a source-verified audit finding; file headers carry the detail.
 
-## 0.8.29–0.8.30
+## 0.8.29–0.8.31
 - Two paired diagnostics for the charge/parry same-tile desyncs (tester: "my char and the enemy stood on the
   same tile"; `ChargeBuff` 12–13 ticks before both first mismatches): charge-path resolutions logged with
   cache source — the partial-cache lookup ignores the target entity and cuts a possibly preview-polluted
@@ -17,6 +17,11 @@ fix was driven by a two-sided log capture or a source-verified audit finding; fi
   The source diagnostic stays armed as the fix's validator (a `partial-cache` line in MP = not holding).
   Also corrected: DashDeliveryFix's comment claiming delivery-tick skew "self-heals" — count-equal streams
   re-align, but threshold-crossing accumulators (the Tactician remainder) can latch a skew permanently.
+- 0.8.31 hardening: the `[ChargeFix]` activation log moved out of the fail-open path (third occurrence of the
+  pattern — now a standing rule: activation logs never live inside fail-open trys); the file header states the
+  fix status and exact-parity requirement; and the validator's epistemics are documented honestly — prefix and
+  postfix share one patch class, so verification needs all three signals (no init error, `[ChargeFix] Active`,
+  no `partial-cache` lines), not silence alone. MOD-PLAN status-of-record caught up from 0.8.25.
 
 ## 0.8.26–0.8.28
 - Trap/pause containment shipped (4.5-hour capture, evidence conclusive: 72-vs-10 trap NREs, 514-vs-107

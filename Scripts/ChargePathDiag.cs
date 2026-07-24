@@ -13,12 +13,19 @@
 // REMOVED the partial lookup entirely and requires target-identity match on full-cache hits
 // (DH PathfindingService :713).
 //
-// This logs every charge-path resolution in MP with its SOURCE (exact-cache / partial-cache / computed),
-// caster, origin/destination, target id+position, and the resolved path's final node position (read
-// reflectively -- GraphNode lives in the A* assembly). The decisive two-sided evidence: a PARTIAL-cache hit
-// on one peer (computed/exact on the other) whose final node sits on the target's position. If confirmed,
-// the narrow fix is disabling ONLY partial-cache reuse in MP (Dark Heresy's shape). NOT a fix yet.
-// Log-only -> subset-safe; MP-gated; charges are rare, so every call logs.
+// SINCE v0.8.30 THIS FILE CARRIES THE FIX (Codex round 34 -- conviction from symptom + mechanism + Dark
+// Heresy corroboration, no capture needed): in MP, partial-cache reuse is DISABLED (prefix returns null);
+// exact target-checked hits stay cached; unmatched paths recompute; solo untouched. This is a
+// SIMULATION-CHANGING fix: EXACT PARITY REQUIRED (see MOD-PLAN doctrine) -- a mixed install changes which
+// path one peer charges along.
+//
+// The resolution diagnostic remains as the fix's TRIPWIRE, with honest epistemics (Codex round 35): the
+// prefix and postfix live in the SAME patch class, so silence alone is inconclusive (a failed install
+// removes both). Verification of the fix requires all three: (1) no [Init][ERR] for Partial_Patch at boot,
+// (2) the one-time "[ChargeFix] Active" line, (3) no subsequent "partial-cache" source line in MP.
+// Diagnostics log every charge-path resolution with SOURCE (exact-cache / partial-cache / computed),
+// caster, origin/destination, target id+position, and the resolved path's final node (read reflectively --
+// GraphNode lives in the A* assembly). Charges are rare, so every call logs.
 using System;
 using System.Collections;
 using System.Reflection;
@@ -69,21 +76,36 @@ namespace MultiplayerStability
 
             private static bool Prefix(ref object __result)
             {
+                bool multiplayer;
                 try
                 {
-                    if (!NetworkingManager.IsMultiplayer)
-                        return true;                             // solo: vanilla partial reuse untouched
-                    __result = null;
-                    if (!s_loggedActive)
-                    {
-                        s_loggedActive = true;
-                        MultiplayerStabilityMain.Log("[ChargeFix] Active -- partial charge-path cache reuse disabled in multiplayer (exact hits kept; unmatched paths recompute).");
-                    }
-                    return false;                                // no partial reuse: fall through to compute
+                    multiplayer = NetworkingManager.IsMultiplayer;
                 }
                 catch (Exception)
                 {
                     return true;                                 // fail-open: vanilla behaviour
+                }
+                if (!multiplayer)
+                    return true;                                 // solo: vanilla partial reuse untouched
+                // Once MP is confirmed, the suppression is unconditional -- logging is best-effort and can
+                // never route back to the defective lookup (the activation-log-in-fail-open pattern has now
+                // bitten three times; rule: activation logs never live inside fail-open trys).
+                __result = null;
+                LogActiveOnce();
+                return false;                                    // no partial reuse: fall through to compute
+            }
+
+            private static void LogActiveOnce()
+            {
+                try
+                {
+                    if (s_loggedActive)
+                        return;
+                    s_loggedActive = true;
+                    MultiplayerStabilityMain.Log("[ChargeFix] Active -- partial charge-path cache reuse disabled in multiplayer (exact hits kept; unmatched paths recompute).");
+                }
+                catch (Exception)
+                {
                 }
             }
 
