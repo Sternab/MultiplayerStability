@@ -17,3 +17,7 @@ logs/
 Mod Build Logs*/
 *.zip
 *.7z
+
+# Python bytecode from running the tools/
+__pycache__/
+*.pyc
