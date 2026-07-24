@@ -10,18 +10,21 @@
    Skipped targets (type in an assembly you did not pass) **fail the run** unless `--allow-skip`;
    `--reconcile Scripts` scans the source for patch sites and fails if any is missing from the
    table. Run it after every game update and before every build. It cannot detect runtime inlining
-   or IL-pattern drift.
-2. **Package verification** — `tools/verify-package.ps1`: manifest version, DLL presence/freshness,
+   or IL-pattern drift. Requires Python 3 with `dnfile==0.18.0` (`pip install dnfile==0.18.0`).
+2. **Comment-only proof** — `tools/verify-comments-only.py`: tokenizes every `.cs` file changed in a
+   git range, strips comments, and compares, proving a documentation pass changed no executable
+   statement. Used for the `v0.8.32..HEAD` delta this package ships.
+3. **Package verification** — `tools/verify-package.ps1`: manifest version, DLL presence/freshness,
    required folders (including `Blueprints/`), and SHA-256 comparison against
    `HANDOFF-MANIFEST.md`.
-3. **Boot self-verification** — the mod reports its own health at startup: per-class patch isolation
+4. **Boot self-verification** — the mod reports its own health at startup: per-class patch isolation
    (`[Init] Patches applied (N classes)`, any failure named with `[Init][ERR]` while other components
    continue), per-transpiler swap counts, loud `PATTERN NOT FOUND` on IL drift, and runtime arming
    lines per component (`REPRODUCING.md` lists the full expected set).
-4. **Field validation** — the primary evidence: two-/three-machine sessions with the built-in
+5. **Field validation** — the primary evidence: two-/three-machine sessions with the built-in
    instrumentation, archived as paired captures and diffed (protocol in `REPRODUCING.md`). Statuses
    in `PATCH-CATALOG.md` reflect exactly what this has and has not proven.
-5. **Solo regression** — solo sessions must show no mod arming lines for MP-gated components, no
+6. **Solo regression** — solo sessions must show no mod arming lines for MP-gated components, no
    `[ERR]` lines, vanilla behavior intact.
 
 ## Honest gaps

@@ -12,7 +12,8 @@ fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 | Mod source: review head | `2a935b5` plus this identity-stamp commit — a committed file cannot
   contain its own commit hash, so the resolved head is stamped at packaging time in
   `SNAPSHOT-COMMIT.txt` and the outer `README-HANDOFF.md`. Delta from the build tag is documentation
-  and comments only — verify with `git diff v0.8.32..HEAD` plus the comment-stripped source check |
+  and comments only — reproduce with `python tools/verify-comments-only.py` from a checkout of this
+  repository (it tokenizes every changed `.cs` file and compares the comment-stripped forms) |
 | Docs repository: build tag | `bb678d1` = tag `docs-v0.8.32` |
 | Docs repository: review head | `03fd08f` (documentation-only ahead of its build tag) |
 | Manifest `UniqueName` / `Version` | `MultiplayerStability` / `0.8.32` |
@@ -24,15 +25,27 @@ fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 |---|---|
 | Game version (all field sessions) | Warhammer 40,000: Rogue Trader `1.6.1.514` (Steam) |
 | Unity editor | `6000.0.64f1` |
-| `Code.dll` (reference assembly) SHA-256 | `33002BB397EB044C3C2425F1342C5C21671023EA1989A7594B573E3879A33420` |
-| `0Harmony.dll` (bundled Harmony) SHA-256 | `9611251F080E4855CD9D5FA54B5E56034DF25B70B374C49BA09550B08A1BF875` |
+
+The assemblies the mod compiles against and the target checker reads. **Provenance matters: the
+template's reference assemblies are not byte-identical to the game install's.** All 57 documented
+targets resolve against either set (verified on both, plus the template-shipped original `Code.dll`).
+
+| Assembly | Source used here | Bytes | SHA-256 |
+|---|---|---|---|
+| `Code.dll` | template `Assets/RogueTraderAssemblies/` (see `BUILDING.md` — this copy is locally re-serialized) | 14,228,480 | `33002BB397EB044C3C2425F1342C5C21671023EA1989A7594B573E3879A33420` |
+| `RogueTrader.GameCore.dll` | template `Assets/RogueTraderAssemblies/` | 400,384 | `BA929D3AE15F013B42A18B043178C9217392CC60E409323353C37788C8F1D00B` |
+| `StatefulRandom.dll` | template (byte-identical to the game install's copy) | 14,848 | `49DB59F9CF63E89F03FC191B6D8E127C4DA0901174270066CE632261774007A4` |
+| `Owlcat.Runtime.Visual.dll` | **game install** `WH40KRT_Data/Managed/` (not present in the template) | 1,027,584 | `163CADDA6B8F0BF2D79D76270A804525584E0E2760F228C87C7F714E689582BD` |
+| `0Harmony.dll` | game-supplied Harmony the mod patches through; the template's copy is byte-identical | 909,824 | `9611251F080E4855CD9D5FA54B5E56034DF25B70B374C49BA09550B08A1BF875` |
+
+The mod package ships no Harmony of its own.
 
 ## Packaged artifact
 
 | Item | Value |
 |---|---|
-| Package | `MultiplayerStability.zip` |
-| Size / timestamp | 48,500 bytes / 2026-07-24 06:21:14 (local) |
+| Package | `MultiplayerStability-0.8.32.zip` (built as `MultiplayerStability.zip`; renamed in the handoff package) |
+| Size / build timestamp | 48,500 bytes; DLL and package entries built 2026-07-24 06:21:14 (local) |
 | Package SHA-256 | `95CCBD1C1B02C0BEB6C807C2F1F1FE36C1EF86A409B30DF6E1841DA9BBA02B89` |
 | `Assemblies/MultiplayerStability.dll` | 111,104 bytes, SHA-256 `B954483BB63C53C2F25910F32CDB69340CDE2A7BDFA5B205AB5880722B596B05` |
 
@@ -67,8 +80,12 @@ source file to its component, targets, and status.
 ## Verification commands
 
 ```powershell
-Get-FileHash MultiplayerStability.zip -Algorithm SHA256      # expect 95CCBD1C...
-Get-FileHash Assemblies\MultiplayerStability.dll -Algorithm SHA256  # expect B954483B...
+# from the handoff package root:
+Get-FileHash MultiplayerStability-0.8.32.zip -Algorithm SHA256
+#   expect 95CCBD1C1B02C0BEB6C807C2F1F1FE36C1EF86A409B30DF6E1841DA9BBA02B89
+Expand-Archive MultiplayerStability-0.8.32.zip -DestinationPath .\pkg
+Get-FileHash .\pkg\Assemblies\MultiplayerStability.dll -Algorithm SHA256
+#   expect B954483BB63C53C2F25910F32CDB69340CDE2A7BDFA5B205AB5880722B596B05
 ```
 
 `tools/verify-package.ps1` (in this repository) automates package verification. When run from the

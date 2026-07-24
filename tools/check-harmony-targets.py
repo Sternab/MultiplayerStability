@@ -406,8 +406,10 @@ def main(argv):
             print("all discovered patch sites are covered by the table (or listed exceptions)")
 
     if rc == 0:
-        print("\nALL TARGETS RESOLVE (no skips%s)"
-              % ("; source reconciled" if reconcile_dir else ""))
+        # With --allow-skip, rc can be 0 while targets went unverified -- never claim otherwise.
+        skip_note = ("no skips" if not skipped else "%d SKIPPED and NOT VERIFIED" % skipped)
+        print("\nALL LISTED TARGETS RESOLVE (%s%s)"
+              % (skip_note, "; source reconciled" if reconcile_dir else ""))
     return rc
 
 

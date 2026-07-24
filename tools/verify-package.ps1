@@ -2,8 +2,11 @@
 # Usage:
 #   powershell -File tools\verify-package.ps1 -Path <MultiplayerStability.zip | installed folder>
 #             [-ExpectedVersion 0.8.32] [-ExpectedZipSha <hash>] [-ExpectedDllSha <hash>]
+#             [-AllowDllOlderThanSource]
 # Checks: manifest version, DLL presence, required folders (incl. Blueprints), optional SHA-256s,
 # and DLL freshness relative to the newest source file when run from the repo.
+# -AllowDllOlderThanSource: for the review snapshot, whose comment-only edits postdate the frozen
+# build -- without it that (correct, expected) condition is reported as a failure.
 param(
     [Parameter(Mandatory = $true)][string]$Path,
     [string]$ExpectedVersion = "0.8.32",

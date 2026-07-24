@@ -1,6 +1,7 @@
 # Patch Catalog — MultiplayerStability v0.8.32
 
-Canonical inventory of all 23 components across 25 source files. Statuses use a strict vocabulary:
+Canonical inventory of all 23 components across 24 source files (plus `MultiplayerStabilityMain.cs`,
+the enter point). Statuses use a strict vocabulary:
 **Field validated** (post-fix two-sided capture proves the class gone) · **Mechanism confirmed;
 post-fix validation pending** (defect proven from captures/source; the fix itself has not yet been
 proven by a post-fix capture) · **Diagnostic only** · **Withdrawn or superseded** · **Infrastructure**.
@@ -26,7 +27,8 @@ with a **root-cause note** locating the defect's origin; these are observations,
 - **Gate/category:** runs only through co-op-only seams; ack pump subset-safe, boost negotiated.
 - **Failure policy:** finalizer-balanced teardown; peer check fail-open to vanilla.
 - **Consequences:** none in solo; no simulation contact.
-- **Status:** Field validated (measured transfer-rate change across the session record).
+- **Status:** Infrastructure — measured in the field (transfer-rate change across the session record).
+  "Field validated" is reserved in this catalog for desync classes proven absent post-fix.
 - **Root-cause note:** the transfer ceiling comes from the frame-clocked ack pump and the default
   chunk/window constants, not from available bandwidth.
 
@@ -41,7 +43,8 @@ with a **root-cause note** locating the defect's origin; these are observations,
   per-peer sends. ~8× measured speedup; 10/10 recent field transfers delivered (`fed to game=True`).
 - **Gate/category:** negotiated (all peers modded + on Steam), transparent Photon fallback otherwise.
 - **Failure policy:** any failure/timeout → vanilla path; anti-spoof accept-list; main-thread pump.
-- **Status:** Field validated. Known 0.9 work: wire framing, ACK/NACK semantics, per-peer fallback
+- **Status:** Infrastructure — measured in the field (~8x speedup; 10/10 recent transfers delivered).
+  Known 0.9 work: wire framing, ACK/NACK semantics, per-peer fallback
   (see `ROADMAP-0.9.md` items 2–3) — these are hardening gaps, not observed field failures.
 - **Root-cause note:** this side channel exists only because the relay path is rate-capped; it adds
   no capability beyond bulk-byte transport.

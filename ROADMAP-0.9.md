@@ -2,7 +2,7 @@
 
 Five concerns, in this order, each as a separate reviewed commit with its own tests and rollback
 boundary. **New gameplay fixes are frozen for the duration of this series** — the goal is a safety
-envelope around the existing, field-tested behavior.
+envelope around the existing behavior (per-component validation status in `PATCH-CATALOG.md`).
 
 ## 1. Session-latched compatibility state, component registry, lifecycle epochs
 

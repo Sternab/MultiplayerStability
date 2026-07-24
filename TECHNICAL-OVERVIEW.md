@@ -14,12 +14,12 @@ Per-component validation status is tracked individually in `PATCH-CATALOG.md`;
 
 ## The one-sentence thesis
 
-Working hypothesis, consistent with everything observed on game build `1.6.1.514`: the lockstep
-design is sound and its enforcement is incomplete — the recurring defect shape is
+Across the captures reviewed on game build `1.6.1.514`, the recurring divergence pattern is
 **client-local input (fog, camera, render visibility, view objects/bones, UI refresh timing, Unity
-physics/trigger callbacks, cache pollution from aiming previews) feeding hashed simulation state** —
-and every fix here either severs one such path or makes the affected decision derive from
-synchronized state.
+physics/trigger callbacks, cache pollution from aiming previews) entering hashed simulation state** —
+and each prevention fix here either severs one such path or makes the affected decision derive from
+synchronized state. Open items that do not yet fit this pattern are listed in
+`KNOWN-LIMITATIONS.md`.
 
 ## Reading order
 
@@ -39,7 +39,7 @@ synchronized state.
   charge-path partial cache, paused-command IK NRE, bark/`PlayedBanters` UI write, preview-copy RNG
   scope.
 - **Diagnostic tooling**: out-of-tick hashed-RNG leak detector, per-bucket desync attribution +
-  RNG/entity fingerprint rings, and three armed scoped diagnostics.
+  RNG/entity fingerprint rings, and four armed scoped diagnostics.
 - **Mod-only infrastructure** (specific to running as a mod): Steam P2P save-transfer side channel,
   Photon ack-pump, sequenced loading barriers, per-class patch isolation.
 
