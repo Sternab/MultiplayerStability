@@ -101,8 +101,9 @@ namespace MultiplayerStability
                 {
                     if (s_loggedActive)
                         return;
-                    s_loggedActive = true;
                     MultiplayerStabilityMain.Log("[ChargeFix] Active -- partial charge-path cache reuse disabled in multiplayer (exact hits kept; unmatched paths recompute).");
+                    s_loggedActive = true;       // latch AFTER success: a failed log retries later, so the
+                                                 // verification signal is never permanently lost (round 36)
                 }
                 catch (Exception)
                 {
