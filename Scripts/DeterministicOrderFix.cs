@@ -1,15 +1,13 @@
 // Deterministic ordering for physics-broadphase unit queries (Channel-B audit rank 8).
 //
 // EntityBoundsHelper.FindUnitsInRange returns units in raw PhysicsScene2D.OverlapCircle order -- a function
-// of each client's collider creation/toggle HISTORY (including the sleep-toggled vision colliders), so the
-// order legitimately differs across machines even when the membership is identical. The engine authors
-// treat raw broadphase order as nondeterministic themselves: the sibling FindUnitsInShape sorts its results
-// with MechanicEntityHelper.ByIdComparison (EntityBoundsHelper.cs:182). FindUnitsInRange just misses the
-// same sort.
+// of each client's collider creation and toggle history. The order can differ across machines even when
+// membership is identical. The sibling FindUnitsInShape method sorts its results with
+// MechanicEntityHelper.ByIdComparison (EntityBoundsHelper.cs:182); FindUnitsInRange does not.
 //
 // Why it matters: PsychicPhenomenaRedirect picks its victim via list.Random(PFStatefulRandom.Mechanics) over
-// this list -- both machines consume the SAME hashed draw but resolve it to DIFFERENT units, so perils-of-
-// the-warp damage lands on different entities while every RNG stream stays perfectly in-hash (structurally
+// this list. Both machines can consume the same hashed draw but resolve it to different units, so perils-of-
+// the-warp damage lands on different entities while every RNG stream remains synchronized (structurally
 // invisible to the LeakDetector). The ricochet candidate list and crossfire iteration ride the same order.
 //
 // Fix: one postfix applying the engine's own ByIdComparison (UniqueId ordinal -- the cross-machine-identical

@@ -6,9 +6,9 @@
 // syncData). The recurring defect family this mod exists for is client-local state -- fog-of-war,
 // camera, render visibility, view bones, UI refresh timing, preview units -- feeding hashed simulation.
 //
-// 23 components across 25 files: root-cause prevention fixes, transfer/lobby infrastructure, and
-// log-only diagnostics. PATCH-CATALOG.md is the canonical per-component inventory (what each patches,
-// why, evidence status, peer-compatibility category); EVIDENCE-MATRIX.md maps claims to captures.
+// 23 components across 25 files: prevention fixes, transfer/lobby infrastructure, and
+// log-only diagnostics. docs/PATCH-CATALOG.md is the canonical per-component inventory (targets,
+// rationale, evidence status, and peer-compatibility category); docs/EVIDENCE-MATRIX.md maps claims to captures.
 //
 // PEER-COMPATIBILITY (three categories):
 //   Subset-safe:           diagnostics + UI-only fixes + the transfer ack pump (any subset of machines).
@@ -16,19 +16,18 @@
 //                          every-peer-modded and engage only then).
 //   Exact parity required: EVERY RNG- or simulation-changing prevention fix. Until the 0.9
 //                          session-latched compatibility gate ships, run the IDENTICAL build on every
-//                          machine (COMPATIBILITY.md).
+//                          machine (docs/COMPATIBILITY.md).
 //
-// Doctrine (KNOWN-LIMITATIONS.md has the full statement):
-//   - No auto-resync, ever: desync recovery stays the player's explicit choice; this mod diagnoses
-//     and prevents, it never forces reloads.
+// Design rules (docs/KNOWN-LIMITATIONS.md has the full statement):
+//   - No automatic resync: recovery stays under player control; the mod never forces a reload.
 //   - Best-effort fail-open: patching is isolated per class -- a failed class logs [Init][ERR] and stays
 //     inert while the rest continue, so a component spanning several classes or targets can be left
-//     partially active (KNOWN-LIMITATIONS.md); runtime guards fall back to the vanilla path at their site.
+//     partially active (docs/KNOWN-LIMITATIONS.md); runtime guards fall back to the vanilla path at their site.
 //   - Solo-safe: simulation-changing behavior is MP-gated; solo play takes the vanilla paths.
-//   - Instrument before fixing: prevention fixes ship only after captures (or engine-source proof)
-//     name the mechanism; log-only diagnostics do the naming.
+//   - Evidence requirement: prevention fixes require a two-sided capture or a complete engine-source
+//     path that identifies the mechanism.
 //
-// Open backlog: ROADMAP-0.9.md. Loading-speed work lives in the separate FasterLoadTimes mod
+// Planned work: docs/ROADMAP-0.9.md. Loading-speed work lives in the separate FasterLoadTimes mod
 // (not co-op-specific; subset-safe).
 // =====================================================================================================
 using System.Reflection;
@@ -69,7 +68,7 @@ namespace MultiplayerStability
                 {
                     failed++;
                     // "component inert" here means THIS PATCH CLASS is inert; a component built from
-                    // several patch classes can be left partially active (see KNOWN-LIMITATIONS.md).
+                    // several patch classes can be left partially active (see docs/KNOWN-LIMITATIONS.md).
                     Log("[Init][ERR] patch class " + type.Name + " failed (component inert, others unaffected): " + e.Message);
                 }
             }

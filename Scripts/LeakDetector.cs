@@ -1,42 +1,34 @@
-// Out-of-tick leak DETECTOR -- the proactive keystone (v0.7.0). Turns the whole campaign from reactive
-// (wait for both machines to desync, diff two logs) to PROACTIVE (name the leaking site on ONE machine,
-// with no desync required -- it even works solo).
+// Out-of-tick leak detector (v0.7.0). Reports a leaking call site on one machine before a paired
+// desync capture is available. It also works in solo sessions.
 //
-// ROOT CAUSE it targets: Rogue Trader is a single-player engine retrofitted for lockstep with no enforced
-// boundary between the VIEW layer (frame-timed, client-local) and the SIM layer (the hashed state). Every
-// desync we have fixed was the view layer drawing a HASHED RNG stream or minting a hashed entity/fact id
-// from outside deterministic execution. That whole class shares ONE testable invariant:
+// Several confirmed desyncs involved view code drawing a hashed RNG stream or minting a hashed
+// entity/fact id outside deterministic execution. This class has one testable invariant:
 //
-//     a HASHED (serializable) PFStatefulRandom draw must only happen INSIDE a deterministic sim tick.
+//     A serializable PFStatefulRandom draw should occur inside a deterministic simulation tick.
 //
-// The engine gives us every piece to check it (verified against the decompile):
-//   - Rand.Get() (Rand.cs:50) is the SINGLE universal chokepoint: every hashed RNG draw AND every uuid mint
-//     (Uuid.CreateGuid -> m_Random.Range -> Rand.Get) funnels through this one instance method.
-//   - PFStatefulRandom.Serializable (PFStatefulRandom.cs:311) is the exact set of HASHED streams; each
+// Implementation:
+//   - Rand.Get() (Rand.cs:50) is the common entry point for hashed RNG draws and uuid allocation
+//     (Uuid.CreateGuid -> m_Random.Range -> Rand.Get).
+//   - PFStatefulRandom.Serializable (PFStatefulRandom.cs:311) identifies the hashed streams; each
 //     StatefulRandom exposes .Rand (the Rand instance Get() runs on) and .Name.
-//   - RealTimeController.IsSimulationTick (RealTimeController.cs:334, public) is the engine's own marker for
-//     "we are inside a deterministic sim tick".
+//   - RealTimeController.IsSimulationTick (RealTimeController.cs:334) identifies simulation execution.
 //   - Rand.Get()'s built-in DisableStatefulRandomContext branch (Rand.cs:52) already diverts whitelisted
-//     view-time draws to the non-hashed fallback -- so a draw under that context is NOT a hashed mutation.
+//     view-time draws to the non-hashed fallback.
 //
-// So one Harmony prefix on Rand.Get() detects the entire leak class: if this Rand belongs to a hashed
-// stream, we are NOT in a sim tick, not under the disable-context, and on the main thread -> that draw is a
-// latent desync, and the captured stack names the exact leaking site (e.g. WeatherMinMaxRateSpawnController).
+// A Harmony prefix reports a main-thread draw when the Rand belongs to a hashed stream, execution is
+// outside a simulation tick, and DisableStatefulRandomContext is not active. The stack identifies the
+// call site for review.
 //
-// LOG-ONLY by design. It never changes a draw -- the plan's "firewall" (auto-diverting a leaked draw to the
-// fallback) is deliberately NOT built here: the fallback is non-deterministic, so firewalling a FALSE
-// POSITIVE (real sim work that legitimately runs just outside the IsSimulationTick bracket -- area load,
-// spawners, the few TickType.Any controllers) would MANUFACTURE the desync it was meant to prevent. The
-// detector's out-of-tick set is exactly that false-positive surface; we LOG it and tune the allow-list from
-// evidence before ever considering a whitelisted firewall.
+// This component is log-only and never changes a draw. Automatically diverting an out-of-tick draw to
+// the non-deterministic fallback would create a desync when the report is a false positive, such as
+// legitimate simulation work immediately outside the IsSimulationTick bracket. Reports are used to tune
+// the allow-list and identify call sites; they are not suppressed automatically.
 //
-// KNOWN LIMITS (documented, not bugs): (a) Rand.Get() is tiny and a JIT-inlining candidate -- patching at
-// mod init (before gameplay JIT) should make it fire; the VERIFICATION is that it must name the known
+// Limits: (a) Rand.Get() is small and a JIT-inlining candidate. Patching during initialization should
+// precede gameplay JIT; the verification case is the known
 // weather leak in a lightning area. If it stays silent there, hook Rand.RangedRandom/GetFloat too.
-// (b) off-main-thread draws (Pathfinding is serializable and can draw from a worker) are skipped -- a blind
-// spot, since IsSimulationTick can't be read safely off-thread. (c) Channel-B leaks (a view FLAG read by a
-// mechanics decision, e.g. LOSGetter) do NOT pass through Rand.Get, so the detector cannot see them -- those
-// stay a manual grep discipline. This catches the RNG/uuid-mint class (channels A, D, and part of C).
+// (b) Off-main-thread draws are skipped because IsSimulationTick cannot be read safely there.
+// (c) Mechanics paths that read a view flag without calling Rand.Get are outside this detector's scope.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

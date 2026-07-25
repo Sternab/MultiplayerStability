@@ -1,18 +1,17 @@
-// Desync diagnosis. Vanilla ships blind: the "potential desync" handler list is EMPTY in release
-// (sub-2-second desyncs are completely silent), the warning dialog fires once per SESSION (WasDesync
-// latch), and nothing ever says WHICH state diverged. This file makes desyncs visible and attributable
-// without ever forcing a resync (player's choice, per project owner):
+// Desync diagnostics. In the release build, the potential-desync handler list is empty, mismatches
+// shorter than two seconds are silent, and the warning dialog fires once per session through the
+// WasDesync latch. This component adds attribution without initiating a resync:
 //   1. injects a logging IDesyncHandler into both handler lists of the live detection strategy;
 //   2. records (tick, localHash) each tick and, on mismatch, logs every peer's reported hash plus the
 //      inferred tick%5 state bucket (player/sceneEntities/areaPersistent/randomState/syncData+signals);
-//   3. traces which serializable RNG streams advanced each sim tick, so randomState desyncs name the
-//      guilty stream (e.g. Weather advancing per-frame);
+//   3. traces which serializable RNG streams advanced each sim tick, so randomState desyncs identify the
+//      affected stream (e.g. Weather advancing per frame);
 //   4. re-arms the once-per-session latch when an episode recovers (~5s of matching hashes), so later
 //      desyncs still notify. While continuously diverged nothing re-fires, so no dialog spam;
 //   5. suppresses the vanilla resync DIALOG (UIDesyncHandler.ShowMessageBox, via a prefix) for confirmed
 //      randomState-only desyncs that fire during a loading/cutscene/fade transition (frame-timing flaps that
 //      self-heal) -- still logged in full; the dialog is re-shown if the episode graduates to another state
-//      bucket or persists past the transition. (v0.7.6 only reworded our log; the dialog is the real prompt.)
+//      bucket or persists past the transition.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -183,7 +182,7 @@ namespace MultiplayerStability
                     // flags: they then accumulate cleanly through potential->serious, and nothing wipes the
                     // suppress flag on the serious tick. (HasDesync only turns true AT the serious threshold,
                     // so a HasDesync-rising-edge reset fired on the serious tick and cleared the just-set
-                    // suppress flag, breaking escalation -- review catch.)
+                    // suppress flag, breaking escalation.)
                     if (m_Kind != "serious")
                         ResetEpisodeFlags();
 
@@ -250,7 +249,7 @@ namespace MultiplayerStability
                         else sb.Append(',');
                         // Append a post-tick state fingerprint: two clients drawing the same streams on the
                         // same tick look identical without it; the fingerprint diff pinpoints the exact tick
-                        // and stream where the simulations parted (field lesson, 2026-07-02 capture).
+                        // and stream associated with the first recorded divergence (2026-07-02 capture).
                         sb.Append(streams[i].Name).Append(':')
                           .Append((cur.x ^ cur.y ^ cur.z ^ cur.w).ToString("X8"));
                         s_prevStates[i] = cur;
@@ -456,7 +455,7 @@ namespace MultiplayerStability
 
                 // If we HELD vanilla's resync dialog as a transition flap, escalate once it proves it was NOT
                 // transient -- it graduated to another state bucket, or it is still diverged well past the
-                // transition (~10s). Genuinely transient flaps recover (ReArmOnRecovery) well before this and
+                // transition (~10s). Transient flaps recover (ReArmOnRecovery) well before this and
                 // are reset, so they never reach here. On escalation we SHOW the same dialog we held, so the
                 // player still gets the real prompt (UIDesyncHandler ignores its args, so re-invoking is safe).
                 if (s_episodeBoxSuppressed && !s_episodeEscalated)

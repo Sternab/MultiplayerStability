@@ -1,27 +1,15 @@
-// Sequenced co-op loading barriers -- fixes a vanilla engine race.
+// Sequenced co-op loading barriers.
 //
-// The loading barrier (Game.AwaitingNetwork -> NetworkingManager.LockOn -> LockNetManager.Lock) uses ONE
-// reusable lock id (NetLockPointId.LoadingProcess) for the SEVERAL barriers inside a single area
-// transition, with no sequence number, and each client announces each barrier exactly once (edge on first
-// reach, Photon code 8). If one client finishes a barrier and announces the NEXT one while the other is
-// still on the previous barrier, that announcement is absorbed into the wrong barrier's accumulator: the
-// slower client then waits forever for a signal that was already consumed -> "stuck at 100% while the host
-// is already in the area" (field-diagnosed 2026-07-02; a latent vanilla bug any fast-vs-slow pair can hit,
-// and the reason the FasterLoadTimes accelerator had to disable itself in co-op).
+// The loading path reuses NetLockPointId.LoadingProcess for several barriers in one area transition.
+// Announcements carry no sequence number. If a fast peer announces the next barrier while another peer
+// is still on the previous one, the announcement can be consumed by the previous accumulator. The slow
+// peer then waits for a signal that has already been consumed.
 //
-// Fix (active only when EVERY player runs this mod -- it changes the code-8 wire format): tag each barrier
-// announcement with the sender's per-session barrier ORDINAL, and accumulate signals keyed by ordinal, so
-// an early or late announcement lands in ITS OWN barrier's bucket and can never be absorbed by a
-// neighbour. Ordinals stay aligned across clients for free: a barrier completes only when ALL players have
-// signalled it, so no client can advance its ordinal past another's by more than the in-flight barrier --
-// the barrier mechanism self-synchronises the count. The only shared requirement is a common baseline,
-// which we reset at every co-op save-transfer (initial join, rejoin, and desync-resync all route through
-// UploadSave/DownloadSave) and on leaving the room.
+// When every peer has the mod, code-8 announcements include a per-session barrier ordinal and signals
+// are accumulated by ordinal. The baseline resets on save upload/download and room leave.
 //
-// Safety net: if a sequenced barrier is stuck past a timeout AND every remote player has provably moved to
-// a HIGHER ordinal (only possible under ordinal misalignment -- never under a merely-slow peer, which
-// would have sent no higher-ordinal signal), force-complete and log loudly, converting a would-be
-// permanent hang into a recoverable event (host can resync). A slow-but-healthy load never trips this.
+// If a barrier exceeds the timeout and every remote peer has reported a higher ordinal, it is treated as
+// ordinal misalignment and force-completed. A slow peer that has not advanced does not satisfy this test.
 using System;
 using System.Collections.Generic;
 using HarmonyLib;

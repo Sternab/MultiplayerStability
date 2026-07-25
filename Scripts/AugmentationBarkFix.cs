@@ -3,16 +3,14 @@
 // The Star System augmentation screen (AugmentationsVM ctor, :99/:111) picks a cosmetic bark with
 // UnityEngine.Random.Range and raises IBarkBanterPlayedHandler. BarkBanterController.HandleBarkBanter (:49)
 // then does Game.Instance.Player.PlayedBanters.Add(banter) -- and PlayedBanters is in the synchronized
-// Player hash. The screen is CLIENT-LOCAL (only the machine browsing augmentations runs any of this), so
-// the write is one-sided by construction -- the client-random pick just varies which banter poisons the
-// hash. The playing banter also draws the hashed Bark stream.
+// Player hash. The screen is client-local, so only the machine browsing augmentations performs this
+// write. The random pick determines which divergent banter value is stored. Playing the banter also
+// advances the hashed Bark stream.
 //
-// Containment is CALLER-specific (the invariant-beats-provenance lesson inverted: here the OPERATION is
-// legitimate for sim-side raisers -- ShowBanter etudes, system-map objects raise the same event
-// symmetrically on all machines and MUST keep marking banters played -- and illegitimate only for this UI
-// caller): a flag brackets the AugmentationsVM constructor, and HandleBarkBanter skips while it is set in
-// MP. Cost in co-op: the augmentation screen plays no bark banter (it was never synced content -- the pick
-// was client-random anyway). Solo untouched; sim-side banters untouched everywhere.
+// Containment is caller-specific because simulation-side raisers, including ShowBanter etudes and
+// system-map objects, use the same event legitimately on all peers. A flag brackets the
+// AugmentationsVM constructor, and HandleBarkBanter skips only while that flag is set in multiplayer.
+// The augmentation screen plays no bark in co-op. Solo and simulation-side banters are unchanged.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -26,8 +24,7 @@ namespace MultiplayerStability
 {
     internal static class AugmentationBarkFix
     {
-        // Depth counter, not a boolean (review catch): a lone flag cleared unconditionally would break
-        // under re-entrant construction or future constructor chaining. Depth is nesting-safe by shape.
+        // A depth counter remains correct under re-entrant construction or constructor chaining.
         internal static int s_augVmDepth;
 
         [HarmonyPatch]

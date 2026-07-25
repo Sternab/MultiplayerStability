@@ -1,16 +1,16 @@
-// Local time-scale fixes -- the two places a CLIENT-LOCAL input writes TimeController.PlayerTimeScale,
+// Local time-scale fixes for the two places a client-local input writes TimeController.PlayerTimeScale,
 // which multiplies the fixed 50ms step into m_DeltaTime and Player.GameTime. GameTime is [JsonProperty] and
-// hashed (Player root), so a one-sided time-scale is a PERMANENT hash fork plus a wholesale timing skew of
-// every sim event while it differs. Damning contrast: the engine's OTHER time-scale factor
-// (CameraFollowTimeScale) is a synced MemoryPackable GameCommand -- these two just missed the rule.
+// hashed (Player root), so a one-sided time-scale creates a permanent hash fork and changes simulation
+// timing while it differs. CameraFollowTimeScale is synchronized through a MemoryPackable GameCommand;
+// these two writers are not.
 // (Channel-B audit ranks 1 and 14; both verified in the decompile before building.)
 //
 //  1. TurnController.SetTime (TurnController.cs:831): during an AI turn, PlayerTimeScale = 16f when the
-//     current unit is fogged ON THIS CLIENT (fast-forward hidden turns), else AiAbilitySpeedMod (a constant
+//     current unit is fogged on that client (fast-forward hidden turns), else AiAbilitySpeedMod (a constant
 //     1f). One tick of fog disagreement = 800ms vs 50ms of hashed GameTime -- fires on every TB AI turn near
-//     a fog boundary. Fix: transpile the get_IsInFogOfWar read to HiddenForAiTurnSpeed: in MP, ALWAYS 1x
+//     a fog boundary. Fix: transpile the get_IsInFogOfWar read to HiddenForAiTurnSpeed: in MP, always 1x
 //     (never fast-forward). A frustum-union substitution was tried first (v0.8.1) and withdrawn (v0.8.15):
-//     IsInCameraFrustum culls against LOCAL View.RenderersBounds, so it is a proxy, not deterministic.
+//     IsInCameraFrustum culls against local View.RenderersBounds, so it is not deterministic.
 //     Solo keeps the real fog flag (vanilla).
 //  2. UnpauseController.Tick (UnpauseController.cs:23): holding the local pause-invert bind writes
 //     PlayerTimeScale = 0.6f every sim tick -- never synced. Surviving divergence window is StarSystem mode
@@ -58,8 +58,8 @@ namespace MultiplayerStability
         // MP: NEVER fast-forward -- the conservative always-1x policy (v0.8.15). The v0.8.1 version
         // substituted !IsInCameraFrustum believing the frustum union deterministic; the frustum test
         // actually culls against LOCAL View.RenderersBounds (EntitiesInCameraFrustumController :92), so
-        // camera-edge units could still fork the hashed GameTime 16x-vs-1x (external review catch; this was
-        // the standing "camera-edge AI turns" watch item, resolved by code instead of a field incident).
+        // camera-edge units could still fork the hashed GameTime 16x-vs-1x. The final policy removes
+        // this renderer-state dependency.
         // Cost: hidden AI turns run at 1x in co-op -- cosmetic pacing, the designed fallback from day one.
         // Solo: the real client-local fog flag (vanilla exactly).
         public static bool HiddenForAiTurnSpeed(Entity entity)

@@ -1,19 +1,20 @@
-# Roadmap 0.9 — Hardening Series (frozen plan, not implemented in v0.8.32)
+# Roadmap 0.9
 
-Five concerns, in this order, each as a separate reviewed commit with its own tests and rollback
-boundary. **New gameplay fixes are frozen for the duration of this series** — the goal is a safety
-envelope around the existing behavior (per-component validation status in `PATCH-CATALOG.md`).
+This plan is not implemented in v0.8.32. It contains five ordered changes, each intended for a
+separate reviewed commit with its own tests and rollback boundary. **New gameplay fixes are frozen
+while this series is in progress.** The objective is to harden the existing behavior. See
+`PATCH-CATALOG.md` for per-component validation status.
 
 ## 1. Session-latched compatibility state, component registry, lifecycle epochs
 
-- A compatibility latch evaluated **only at simulation epochs** (initial launch, save-transfer
-  relaunch — a joiner is accounted for before `PlayersReadyMask`), never per patch call, never flipped
-  mid-session: if every peer runs the exact compatible build, simulation-changing fixes enable;
+- A compatibility latch evaluated **only at simulation epochs** (initial launch and save-transfer
+  relaunch, with a joiner accounted for before `PlayersReadyMask`), never per patch call and never changed
+  mid-session. If every peer runs the exact compatible build, simulation-changing fixes enable;
   otherwise **all modded peers stay on vanilla behavior** and log one clear warning.
 - Diagnostics and UI-only fixes remain active regardless (see the peer-compatibility categories in
   `PATCH-CATALOG.md`).
 - A component registry with per-component applied/failed/inert status and a startup health table
-  (replacing ad-hoc arming lines as the primary health signal).
+  (replacing ad-hoc activation lines as the primary health signal).
 - Lifecycle resets for all session-scoped diagnostic state (rings, episode flags, tick baselines) at
   room join/leave and save load, with tick-regression guards.
 - Motivating evidence: vanilla mod-parity checking is dead code; mixed-version installs of
@@ -30,7 +31,7 @@ envelope around the existing behavior (per-component validation status in `PATCH
 
 ## 3. Transfer completion ACK/NACK and per-peer fallback
 
-- A completion ACK must mean "the game accepted the bytes" — today `MsgComplete` can be sent when the
+- A completion ACK must mean "the game accepted the bytes." Today `MsgComplete` can be sent when the
   download TCS is absent or `TrySetResult` failed, so the host can believe a failed delivery succeeded.
   Introduce NACK for delivery failure.
 - Multi-peer fallback must track per-peer completion: a late failure currently re-sends via vanilla to
@@ -45,7 +46,7 @@ envelope around the existing behavior (per-component validation status in `PATCH
 ## 5. Tick-identity-checked desync inference; per-call-site LeakDetector accounting
 
 - Bucket attribution currently accepts the first matching 32-bit hash anywhere in a 128-entry ring;
-  field data shows the inferred `senderTick` differing by ±40 ticks between peers for the same
+  field data shows the inferred `senderTick` differing by +/-40 ticks between peers for the same
   mismatch. Inference this ambiguous must not drive user-facing suppression decisions; add tick
   identity checks and treat ambiguous attribution as "unknown".
 - LeakDetector's warning budget is per *stream*; six identical startup warnings have exhausted a
@@ -54,12 +55,14 @@ envelope around the existing behavior (per-component validation status in `PATCH
   `Prepare()` where a failed resolution would otherwise break the patched method), per the trap-fix
   precedent.
 
-## Design lessons the series must honor (earned in the field)
+## Implementation requirements
 
 - Reset diagnostics at **accepted transitions**, never requests (requests can reject, duplicate, or
   defer; only accepted transitions are synchronized across peers).
-- Budget diagnostics around the **comparison**, not the event — success evidence is first-class.
+- Budget diagnostics around the **comparison**, not the event. Successful calls are required for
+  cross-peer comparison.
 - Unique record keys under batching (per-tick per-entity ordinals).
 - Semantic discriminators over temporal ones (which caller, never "was it inside a tick").
-- Activation logs never live inside fail-open trys.
-- A tripwire that shares its install with the thing it watches cannot prove installation.
+- Keep activation logging outside fail-open `try` blocks.
+- A validator installed by the same patch class as the target change cannot independently prove that
+  the class installed.

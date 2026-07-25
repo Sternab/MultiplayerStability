@@ -1,15 +1,15 @@
-// Routes the co-op SAVE bulk bytes over Steam P2P instead of the Photon relay (which hard-caps every peer
-// at ~230 KB/s server-side). Photon stays the control plane: LoadSave/RequestSave/SaveMeta and the whole
-// session FSM are untouched -- only the ~16 MB of save bytes take the Steam path, and ONLY when both peers
+// Routes co-op save bulk bytes over Steam networking instead of the Photon relay, which delivered
+// approximately 230 KB/s per peer in the recorded tests. Photon remains the control plane:
+// LoadSave/RequestSave/SaveMeta and the session state machine are unchanged. Only the save bytes use
+// Steam, and only when both peers
 // are Steam + have this mod. Anything else (GOG/EGS peer, no mod, Steam init failure, mid-transfer P2P
-// failure) falls back transparently to the vanilla Photon transfer, so a failure is "slow like before",
-// never a broken session.
+// failure) falls back to the vanilla Photon transfer.
 //
-// SEAMS (verified against the decompile + template Code.dll):
+// Patch points:
 //   * DataTransporter.SendSave (host) -- prefix: replace the returned Task with our P2P send (or fall back).
 //   * MessageNetManager.OnMessage (both) -- prefix claims free Photon code 100 for the mod handshake
 //     (QUERY/PONG/COMPLETE); every other code runs vanilla.
-//   * SaveNetManager.m_DownloadSaveTcs (receiver) -- DownloadSave awaits ONLY this TCS, so completing it
+//   * SaveNetManager.m_DownloadSaveTcs (receiver) -- DownloadSave awaits this TCS, so completing it
 //     with the Steam-delivered bytes finishes the vanilla flow with no fake receiver and no ack to suppress.
 using System;
 using System.Collections.Generic;

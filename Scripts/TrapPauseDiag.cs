@@ -1,48 +1,26 @@
-// Trap/pause command-lifecycle DIAGNOSTIC -- log-only (capture 0.8.19; two independent
-// sceneEntities episodes, party members only, RNG identical).
+// Trap/pause command diagnostic and null-IK containment.
 //
-// The class (decompile-verified): trap detection auto-pauses; while paused, AbstractUnitCommand.OnRun
-// (:830) calls Executor.ForceLookAt(Target.Point) BEFORE setting DidRun = true. ForceRotateToDesired
-// (AbstractUnitEntity.cs:658) writes SIM orientation (m_Orientation = DesiredOrientation) and THEN touches
-// client-local view state: ViewTransform.rotation, and -- when paused && View.IsVisible -- the IK chain
-// (View.IkController.GrounderIk.ResetPosition()). View.IsVisible and the IK object graph are CLIENT-LOCAL,
-// so the tail can throw AFTER the sim write. (Later-capture correction: both peers often throw on the SAME
-// first keyed invocation -- the divergence is DOWNSTREAM: the shared NRE aborts UnitCommandBuffer.Tick
-// mid-batch and the residual commands/handles retry differently per peer.) Either way the party members'
-// command lifecycle and orientation diverge -> the captured sceneEntities forks (Argenta+player @20:38,
-// Cassia+Kibellah @21:32). Same storm exists in 0.6.4-era logs: a longstanding vanilla defect, not a mod
-// regression.
+// During trap auto-pause, AbstractUnitCommand.OnRun (:830) calls ForceLookAt before setting DidRun=true.
+// ForceRotateToDesired (AbstractUnitEntity.cs:658) writes the simulation orientation, updates the view
+// rotation, and, for a visible unit while paused, calls
+// View.IkController.GrounderIk.ResetPosition(). View visibility and the IK object graph are client-local.
+// A missing IK object throws after the simulation write and aborts UnitCommandBuffer.Tick mid-batch.
+// Retried command residue can then differ between peers. Captures recorded 72 versus 10 null-reference
+// exceptions, 514 versus 107 residual command exceptions, matching affected entity sets, and no RNG
+// difference.
 //
-// This diagnostic does NOT change behavior (exceptions are logged and rethrown unchanged). It exists to
-// give the next capture per-machine evidence of WHERE the asymmetry enters: the FIRST 80 paused-window
-// ForceRotateToDesired calls of each pause episode log unit + view/visibility/transform/IK state, and ALL
-// exceptions log full context regardless of the budget.
-// ACCEPTANCE CRITERION for the two-sided diff (review-hardened -- both 0.8.19 peers threw; mere presence
-// of [EXC] lines proves nothing): every paused-window line carries a UNIQUE key (networkTick, UniqueId, seq)
-// -- seq is a per-tick per-unit counter (dictionary, not last-call comparison, so interleaved A,B,A batching
-// cannot collide) -- and the comparison is a keyed diff across peers: decisive = a key that THREW on one
-// peer while the same key logged a successful breadcrumb (or different state) on the other. Successful-call
-// breadcrumbs are first-class evidence, which is why the budget is per pause EPISODE (reset at the ACCEPTED
-// game-mode transition, HandleGameModeChanged newMode==Pause -- StartMode is only a request that can be
-// rejected or deferred), never per session: a lifetime cap exhausted before the decisive window would erase
-// the successful peer's counterpart, making "succeeded" indistinguishable from "never called." The
-// containment fix (guarding the view tail so bookkeeping completes) comes AFTER this evidence, as its own
-// reviewed change. Candidate sibling seams (movement startup, UnitFollowUnitController.ShouldAct's
-// View.MovementAgent.WantsToMove read) are deliberately not instrumented yet -- scope stays on the proven
-// site.
+// The diagnostic records the first 80 paused-window calls per accepted Pause episode and every exception.
+// Each record uses (networkTick, UniqueId, seq), where seq is a per-tick per-unit ordinal. Cross-peer
+// analysis compares records by this key; exception counts alone are insufficient. The budget resets in
+// Game.HandleGameModeChanged when newMode==Pause, with tick regression as a load fallback.
 //
-// IK objects' types live outside the template reference assemblies -- read reflectively (null-checks only).
-// The DIAGNOSTIC half is log-only. Since v0.8.26 this file also carries the CONTAINMENT (capture 0.8.xx,
-// evidence conclusive: 72-vs-10 trap NREs, 514-vs-107 'Cmd is already set' residue, forks
-// isolated to the touched units, zero RNG/creation differences; three trap storms immediately preceded room
-// disconnections). IMPORTANT CORRECTION from that capture: both peers often threw on the SAME first keyed
-// invocation -- the divergence is DOWNSTREAM: the shared NRE aborts UnitCommandBuffer.Tick mid-batch and the
-// residual commands/handles retry differently per peer. So the cure is containment of the null-IK reset (the
-// NRE no longer aborts the batch), NOT symmetry repair: the reimplementing prefix preserves the sim orientation
-// write and the vanilla view-rotation behavior exactly, and ONLY the paused, visible-unit IK reset becomes
-// null-safe (missing IkController/GrounderIk -> skip, logged). Every unrelated exception still surfaces:
-// an unexpected throw in the reimpl falls back to vanilla (idempotent writes), where it recurs naturally.
-// Do NOT patch UnitCommandBuffer or swallow NREs broadly (explicit review boundary).
+// Since v0.8.26, a multiplayer-only prefix preserves the orientation write and view rotation but treats
+// a successfully read null IkController or GrounderIk as an omitted reset. Missing reflected members
+// disable containment and return to vanilla behavior. ResetPosition exceptions are unwrapped and
+// rethrown once. The patch does not modify UnitCommandBuffer or suppress unrelated exceptions.
+//
+// IK types are read reflectively because their assembly is not referenced by the template.
+// Diagnostic: subset-safe. Containment: exact parity required.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -59,7 +37,7 @@ namespace MultiplayerStability
     {
         // Budget is per pause EPISODE: a session-lifetime cap would exhaust on earlier storms and erase the
         // successful peer's comparison evidence for the decisive episode (the 0.8.19 host
-        // had 57 throwing calls before its first trap). The episode boundary is EXACT (review catch):
+        // had 57 throwing calls before its first trap). The episode boundary is the accepted transition:
         // the budget resets at the ACCEPTED game-mode transition -- HandleGameModeChanged with newMode ==
         // Pause (StartMode is only a REQUEST that can be rejected or enqueued as a command, so a StartMode
         // prefix could reset on rejected/duplicate requests and misalign across peers); tick < lastTick
@@ -279,8 +257,7 @@ namespace MultiplayerStability
             }
 
             // Strictly best-effort: nothing thrown here may reach the containment path -- a logger failure
-            // re-enabling the vanilla NRE would defeat the fix (review catches; one caught the
-            // activation log still inside the fail-open try, one branch from the same self-defeat).
+            // re-enabling the vanilla NRE would defeat the fix. This includes the activation log.
             private static void LogActiveOnce()
             {
                 try
@@ -296,7 +273,7 @@ namespace MultiplayerStability
             }
 
             // Strictly best-effort: nothing thrown here may reach the containment path -- a logger or tick
-            // failure re-enabling the vanilla NRE would defeat the fix (review catch).
+            // failure re-enabling the vanilla NRE would defeat the fix.
             private static void LogContained(AbstractUnitEntity unit, string kind)
             {
                 try
@@ -320,7 +297,7 @@ namespace MultiplayerStability
         // (private; the point every peer's synchronized mode change actually executes) with newMode == Pause.
         // NOT Game.StartMode: that is a request that can be rejected (already-active, game-over) or enqueued
         // as a StartGameModeCommand, so a StartMode reset could fire on rejected/duplicate requests and
-        // misalign across peers (review catch). The per-tick ordinal map is also cleared here so an
+        // misalign across peers. The per-tick ordinal map is also cleared here so an
         // episode's keys start clean.
         [HarmonyPatch(typeof(Game), "HandleGameModeChanged",
             typeof(GameModeType), typeof(GameModeType))]

@@ -3,16 +3,16 @@
 // AbilityCustomDirectMovement (Macabre Dance, and any other dash-through ability built on the component)
 // precomputes its target set deterministically from the grid pattern along the dash path
 // (GetAllTargetUnits), but DELIVERS per poll while the view-layer movement agent is moving
-// (Deliver :288 `while movementAgent.IsReallyMoving`), gating each target on the caster's LIVE mid-dash
+// (Deliver :288 `while movementAgent.IsReallyMoving`), gating each target on the caster's live mid-dash
 // position (HandleNecessaryTargets :361-363). The view agent advances per rendered frame, so the sampled
-// positions differ across machines -- a target one client catches in passing can be MISSED FOREVER on the
-// other (no catch-up pass covers mid-path targets). Field-proven by capture 13 (2026-07-05, both v0.6.6):
+// positions differ across machines. A target detected on one peer can be missed permanently on another
+// because no catch-up pass covers mid-path targets. Capture 13 (2026-07-05, both v0.6.6) recorded this:
 // Macabre Dance applied EnemyEffect on a Necron on one machine and CoverEffect only on the other ->
 // permanent GlobalUuid count fork. Same hazard shape as ProjectileRngFix, for dashes.
 //
-// Fix: in multiplayer, mid-dash delivery is DEFERRED (in-loop calls, recognizable by the movement agent
-// still moving, handle nothing) and the unconditional post-movement call handles EVERY precomputed target
-// at once -- Deliver sets the caster's mechanics position to the dash endpoint (:313) BEFORE that call, so
+// Fix: in multiplayer, mid-dash delivery is deferred. In-loop calls return while the movement agent is
+// still moving, and the unconditional post-movement call handles every precomputed target. Deliver sets
+// the caster's mechanics position to the dash endpoint (:313) before that call, so
 // range-checked main actions (Charge's melee attack!) resolve from the correct position. v1 of this fix
 // delivered everything on the FIRST poll instead and broke Charge: the attack ran while the caster was
 // still at the dash start, out of melee reach. Handling order is sorted by entity UniqueId (ordinal):
@@ -20,8 +20,8 @@
 // `targets` array order, which comes from a HashSet<CustomGridNodeBase> enumeration (reference-hashed =
 // memory order = client-local). Residues accepted: effects land at dash END rather than mid-pass (visual
 // timing only), and the delivery tick can still skew by the dash duration (count-equal streams re-align,
-// but tick-skewed side effects are NOT guaranteed harmless: threshold-crossing accumulators like the
-// Tactician momentum remainder can latch a skew permanently -- review correction). On
+// but tick-skewed side effects are not guaranteed harmless: threshold-crossing accumulators like the
+// Tactician momentum remainder can latch a skew permanently). On
 // the engine's own 5s force-finish error path the agent may still report moving at the final call -- then
 // delivery is skipped symmetrically (a fizzle on an already-errored cast, not a fork).
 // Solo behaviour untouched. Both machines must run the mod (the standing install rule).

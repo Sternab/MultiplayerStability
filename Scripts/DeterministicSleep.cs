@@ -1,34 +1,19 @@
-// Deterministic awake census for multiplayer -- the structural fix for the whole awake-set desync class.
+// Deterministic awake census for multiplayer.
 //
-// Vanilla SleepingUnitsController decides per tick which units are simulated, using camera frustum and
-// fog-of-war (SleepingUnitsController.cs:88-104) -- client-local inputs, so each co-op machine simulates a
-// DIFFERENT subset of the same world. Everything that consumes the awake set then diverges: death
-// resolution timing (UnitLifeController -> the poison-backfire turn fork), multi-target ability counts,
-// turn-start triggers, attack-of-opportunity scans, combat-join membership -- each minting facts/entities
-// (GlobalUuid draws) on one client only. Field-verified twice via fingerprint diffs (2026-07-02).
+// SleepingUnitsController uses camera frustum and fog state to decide which units are simulated
+// (SleepingUnitsController.cs:88-104). Those inputs can differ between peers. The resulting awake set
+// affects death resolution, target counts, turn triggers, attacks of opportunity, and combat joins.
 //
-// Instead of exempting consumers one by one, this REBUILDS the census after the vanilla pass, from
-// synchronized state only, preserving the vanilla optimization's intent:
-//   sleep: not-in-game, fake, suppressed-out-of-combat (all synced flags) -- vanilla's deterministic rules;
-//   sleep: idle "extra" trash mobs FAR from every party member (>40m, synced positions) -- replaces the
-//          camera/fog test with a distance test, keeping big-map performance without per-client inputs;
-//   awake: everything else -- in particular anything in combat, anything at 0 HP still resolving death,
-//          STARSHIPS (space combat is a handful of units at a scale where the distance valve is nonsense),
-//          and anything under an ACTIVE cutscene that is NEAR the party (synced distance; sleep state
-//          gates cutscene pause/resume, so it must resolve identically everywhere or scripted
-//          spawns/actions skew across clients -- far ambient loops pause deterministically instead,
-//          keeping cutscene-dense maps like the bridge performant).
-// The rebuild iterates State.AllUnits in entity-pool order (identical on all clients), so the awake LIST
-// ORDER -- which drives controller processing order and hence RNG consumption order -- is also identical.
-// SetNewAwakeUnits clears and refills, making the override complete. Vanilla AwakeTimer nudges are ignored
-// on purpose: some Wake() callers may be view-driven, and their effect would reintroduce nondeterminism.
+// In multiplayer, a replacing prefix computes one final verdict per unit:
+//   - combat and combat-capable units use synchronized flags and party distance;
+//   - ambient units that cannot join combat retain the vanilla camera/fog verdict;
+//   - dying units, Sleepless units, nearby active-cutscene units, and starships remain awake;
+//   - finally-dead units receive the synchronized IsDeathRevealed=true policy.
+// Verdicts are staged before mutation, then applied in entity-pool order. AwakeTimer values age once
+// per synchronized simulation step. A replacing prefix avoids the repeated IsSleeping writes and
+// View.UpdateViewActive calls caused by the earlier postfix implementation.
 //
-// Seam: REPLACING PREFIX on SleepingUnitsController.Tick (public instance, IControllerTick dispatch --
-// inlining-proof; skip-original in MP so each unit gets exactly ONE IsSleeping write per tick -- the
-// earlier postfix double-wrote disagreeing units and the setter's View.UpdateViewActive() per change was
-// the Thassera FPS regression). Vanilla's ambient verdict is replicated verbatim (VanillaShouldSleep).
-// Multiplayer only; solo keeps the vanilla pass untouched (prefix returns true). Asymmetric-install safe:
-// vanilla pairs already diverge here; both-modded eliminates the class.
+// Solo runs the original method. Multiplayer use requires exact version parity across peers.
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -93,7 +78,7 @@ namespace MultiplayerStability
                 foreach (var unit in Game.Instance.State.AllUnits)   // entity-pool order: same on all clients
                 {
                     bool dying = unit.HitPointsLeft <= 0 && !unit.LifeState.IsFinallyDead;
-                    // Second always-invariant (field-proven by the Pascal-spawn fork, capture 10): a unit
+                    // Capture 10 confirmed a second invariant: a unit
                     // under an ACTIVE cutscene must resolve its sleep state IDENTICALLY on all clients,
                     // because sleep gates cutscene pause/resume (CutscenePlayerData.TickScene ->
                     // AllAnchorsInactive) and downstream commands (unit SPAWNS) fork if one client's
@@ -126,7 +111,7 @@ namespace MultiplayerStability
                                                                      // compute its verdict ourselves -- reading
                                                                      // unit.IsSleeping here would be last tick's)
                     // Two-pass: COMPUTE everything first, mutate nothing yet -- so if any verdict throws,
-                    // the outer catch leaves the vanilla census genuinely untouched (the fail-open promise;
+                    // the outer catch leaves the vanilla census untouched (the fail-open guarantee;
                     // the old single-pass version had already half-mutated the census by that point).
                     s_pendingUnits.Add(unit);
                     s_pendingSleep.Add(sleep);
@@ -134,7 +119,7 @@ namespace MultiplayerStability
                 // Apply pass: trivial assignments only. Per-unit write ORDER matches vanilla (corpse reveal
                 // FIRST, then IsSleeping -- SleepingUnitsController :57-:69): both setters call
                 // UpdateViewActive() and view activeness depends on both flags, so the reversed order could
-                // flicker a corpse's view off/on exactly when its state changes (review catch).
+                // flicker a corpse's view off/on when its state changes.
                 for (int i = 0; i < s_pendingUnits.Count; i++)
                 {
                     var unit = s_pendingUnits[i];
@@ -144,7 +129,7 @@ namespace MultiplayerStability
                     // IsInCameraFrustum alone, believing it deterministic (union of synced cameras) -- but
                     // the frustum test culls against View.RenderersBounds (EntitiesInCameraFrustumController
                     // :92), which is LOCAL renderer state (pose/LOD/view presence), so camera-edge corpses
-                    // could still diverge the hash (external review catch). The only genuinely synced policy:
+                    // could still diverge the hash. The synchronized policy is:
                     // a corpse's death IS synced, so reveal it, period. The flag exists to keep a seen
                     // corpse's view active; always-revealed just means off-screen corpse views stay active
                     // too (fog still culls them visually) -- identical on every machine by construction.
@@ -156,10 +141,10 @@ namespace MultiplayerStability
                         s_awake.Add(unit);
                 }
                 Game.Instance.State.SetNewAwakeUnits(s_awake);
-                // Periodic census line (~60s): quantifies what the census costs vs vanilla on this map --
-                // the data that decides perf questions (bridge FPS) instead of guessing. Deliberately BEFORE
-                // the timer aging so the aging loop is literally the last work in the pass (review catch:
-                // with logging after it, a logger throw could rerun vanilla and double-age timers).
+                // Periodic census line (~60s): compares the active census with vanilla on this map.
+                // Keep it BEFORE
+                // the timer aging so the aging loop is the last work in the pass:
+                // with logging after it, a logger throw could rerun vanilla and double-age timers.
                 if (++s_censusTicks >= 1200 || !s_loggedActive)
                 {
                     s_censusTicks = 0;
@@ -206,7 +191,7 @@ namespace MultiplayerStability
         // PURE replica of vanilla SleepingUnitsController.ShouldBeSleeping (decompile :88-104) for the
         // ambient branch, since the prefix REPLACES vanilla's pass. Vanilla mutates AwakeTimer inside this
         // method; here the verdict only READS it (same pre-decrement semantics as vanilla's >= 0 check) and
-        // the aging is STAGED into the apply pass (review catch: (a) the deterministic branch bypassed the
+        // the aging is STAGED into the apply pass because (a) the deterministic branch bypassed the
         // decrement entirely, so a Wake()'d combat-capable unit kept a positive timer forever; (b) a
         // compute-phase mutation broke the "untouched vanilla on exception" claim and risked a double
         // decrement when vanilla reran after a failure). Deliberately client-local (camera/fog) exactly
@@ -242,7 +227,7 @@ namespace MultiplayerStability
             // Vanilla invariant (ShouldBeSleeping :94/:103): a non-suppressed Sleepless unit NEVER sleeps
             // via the camera/fog clauses -- roaming spawner units and follower behaviours rely on it. This
             // check was missing since v0.6.1 (combat mode) and the combat-capable peaceful rule widened the
-            // exposure (review catch). Order matches vanilla: Suppressed sleep wins over Sleepless.
+            // exposure. Order matches vanilla: Suppressed sleep wins over Sleepless.
             if (unit.Sleepless)
                 return false;
             // Everything else sleeps by synced DISTANCE alone (replaces the camera/fog test for ALL unit

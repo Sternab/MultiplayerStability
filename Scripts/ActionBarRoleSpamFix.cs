@@ -1,27 +1,26 @@
-// Action-bar role-event spam fix -- the 600 MB log storm (tester incident, 2026-07-11; chain verified in
+// Action-bar role-event filtering for the 600 MB log incident (2026-07-11; chain verified in
 // the decompile, counts from retained captures: 18,036 identical exception stacks in the 0.6.9 client log).
 //
 // When a co-op player leaves, PlayerRole.OnPlayerLeftRoom (PlayerRole.cs:112) raises
-// INetRoleSetHandler.HandleRoleSet(entityId) for EVERY controlled entity whose role group contained the
-// leaver (~1,500 on a live save). ActionBarSlotVM.HandleRoleSet (ActionBarSlotVM.cs:560) then IGNORES the
-// entityId parameter and unconditionally refreshes its slot -- so all 12 action-bar slots refresh ~1,500
+// INetRoleSetHandler.HandleRoleSet(entityId) for every controlled entity whose role group contained the
+// leaver (~1,500 on a live save). ActionBarSlotVM.HandleRoleSet (ActionBarSlotVM.cs:560) does not filter
+// by entityId and unconditionally refreshes its slot, so all 12 action-bar slots refresh ~1,500
 // times each, and any slot whose MechanicActionBarSlot has a missing Unit throws NullReferenceException
-// (MechanicActionBarSlot.IsDisabled/IsPossibleActive dereference this.Unit) on EVERY one of those refreshes.
+// (MechanicActionBarSlot.IsDisabled/IsPossibleActive dereference this.Unit) on each refresh.
 // 1,500 x 12 full exception stacks in seconds; GameLogFull has no size cap (LogSinkFactory.cs:29 passes
-// int.MaxValue), so the log grows unbounded -- testers reported 600 MB files. The storm also hitches the
-// disconnect/recovery path and buries the diagnostic evidence we actually need around a player-leave.
+// int.MaxValue), so the log grows unbounded. The incident produced 600 MB files and delayed the
+// disconnect/recovery path.
 //
-// Fix (narrow, UI-only, no simulation contact): prefix on ActionBarSlotVM.HandleRoleSet --
-//   1. unitless slot -> skip the refresh entirely (there is nothing to update; this kills the NRE source);
-//   2. event about a DIFFERENT entity than this slot's unit -> skip (kills the ~1,500x amplification; the
-//      slot still refreshes when ITS unit's role actually changes, which is the handler's purpose).
-// Vanilla behaviour is preserved exactly for the one event that matters to each slot. Deliberately NOT a
-// global exception suppressor -- real exceptions elsewhere keep their full context.
-// UNGATED (no IsMultiplayer check): the filtering invariant is valid in EVERY context, including teardown
+// Fix (UI-only, no simulation contact): prefix on ActionBarSlotVM.HandleRoleSet:
+//   1. unitless slot -> skip the refresh entirely (there is nothing to update and the refresh would throw);
+//   2. event about a different entity than this slot's unit -> skip (removes the ~1,500x amplification;
+//      the slot still refreshes when its unit's role changes).
+// The matching event still runs the original handler. This is not a global exception suppressor.
+// Ungated (no IsMultiplayer check): the filtering invariant is valid in every context, including teardown
 // and the rare non-departure raisers (the net_allow_one cheat raises the room callbacks; PlayerRole.ForceSet
 // raises HandleRoleSet) -- an unrelated entity's role event cannot affect a slot, and a unitless slot has no
-// valid refresh work. No instantaneous player-count test is required or wanted (the v0.8.16 gate disabled
-// the guard during 2->1 departures, the storm's biggest window). Fail-open.
+// valid refresh work. An instantaneous player-count test is incorrect here because Owlcat removes the
+// departing player before the 2->1 departure callbacks. Fail-open.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -39,11 +38,11 @@ namespace MultiplayerStability
         {
             try
             {
-                // Deliberately NO IsMultiplayer gate (v0.8.17): the filtering invariant below is valid in
+                // No IsMultiplayer gate (v0.8.17): the filtering invariant below is valid in
                 // every context -- an unrelated entity's role event cannot change this slot's state, no
                 // matter who raised it (departure teardown, PlayerRole.ForceSet, cheats). The instantaneous
-                // PlayerCount>1 check actively DISABLED the guard during 2->1 departures (Owlcat removes
-                // the departing player BEFORE raising the callbacks) -- the captured storm's biggest window
+                // PlayerCount>1 check disabled the guard during 2->1 departures (Owlcat removes
+                // the departing player before raising the callbacks), which was the highest-volume window
                 // (~270 of 425 stacks in the field capture).
                 var slot = __instance.MechanicActionBarSlot;
                 var unit = slot != null ? slot.Unit : null;
@@ -72,8 +71,8 @@ namespace MultiplayerStability
     // slot refresh and NRE the same way on unitless slots. These are per-player events (once per join/
     // leave, not per-entity -- hence the smaller storm), and a player change legitimately affects every
     // slot's net-role availability, so no entity filter applies here -- only the unitless skip.
-    // Targets resolved by explicit name + single-Player-parameter match (the 0.8.13 lesson: never
-    // name-only lookups) without needing a compile-time Photon.Realtime reference.
+    // Resolve targets by explicit name and a single Player parameter, avoiding ambiguous
+    // name-only lookups without adding a compile-time Photon.Realtime reference.
     [HarmonyPatch]
     internal static class ActionBarSlotVM_RoomEvents_NoSpam_Patch
     {

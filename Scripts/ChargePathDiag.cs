@@ -1,29 +1,27 @@
-// Charge-path cache DIAGNOSTIC -- log-only (tester report: "charged, attacked, he parried,
-// desync -- my char and the enemy stood on the SAME TILE"; ChargeBuff appeared 12-13 ticks before both
-// first mismatches).
+// Charge-path cache fix and diagnostic. A tester reported a desync after charge, attack, and parry
+// with the caster and target on the same tile. ChargeBuff appeared 12-13 ticks before both first
+// mismatches.
 //
-// Suspected mechanism (decompile-verified): PathfindingService.FindPathChargeTB_Blocking (:727) tries
-// FindFullCachedPath, then FindPartialCachedPath, then ComputeAndCachePath. The PARTIAL lookup matches on
-// caster + origin + ignoreBlockers ONLY -- no destination key and NO TARGET ENTITY -- then finds the
-// destination as a node INDEX inside a cached path and cuts there. Local aiming PREVIEWS feed the same
-// cache, so a path cached under different target occupancy can be cut at the enemy's occupied node and
-// reused on the CONTROLLING client only; charge delivery then unconditionally writes
-// context.Caster.Position = lastNode.Vector3Position (AbilityCustomDirectMovement :313) -> caster lands ON
-// the target's tile on one peer: exactly the reported symptom. Corroboration: Dark Heresy's newer engine
-// REMOVED the partial lookup entirely and requires target-identity match on full-cache hits
+// PathfindingService.FindPathChargeTB_Blocking (:727) tries
+// FindFullCachedPath, then FindPartialCachedPath, then ComputeAndCachePath. The partial lookup matches on
+// caster, origin, and ignoreBlockers, but not destination or target identity. It then finds the destination
+// as a node index inside a cached path and cuts there. Local aiming previews feed the same cache, so a path
+// created under different target occupancy can end at the target's occupied node on one peer. Charge
+// delivery then writes context.Caster.Position = lastNode.Vector3Position
+// (AbilityCustomDirectMovement :313). Dark Heresy's newer implementation removed the partial lookup and
+// requires target identity on full-cache hits
 // (DH PathfindingService :713).
 //
-// SINCE v0.8.30 THIS FILE CARRIES THE FIX (conviction from symptom + mechanism + Dark
-// Heresy corroboration, no capture needed): in MP, partial-cache reuse is DISABLED (prefix returns null);
-// exact target-checked hits stay cached; unmatched paths recompute; solo untouched. This is a
-// SIMULATION-CHANGING fix: EXACT PARITY REQUIRED (see PATCH-CATALOG.md) -- a mixed install changes which
+// Since v0.8.30, multiplayer disables partial-cache reuse by returning null from the prefix.
+// Exact target-checked hits stay cached, unmatched paths recompute, and solo is unchanged. This changes
+// simulation behavior and requires exact parity (see docs/PATCH-CATALOG.md); a mixed install changes which
 // path one peer charges along.
 //
-// The resolution diagnostic remains as the fix's TRIPWIRE, with honest epistemics: the
-// prefix and postfix live in the SAME patch class, so silence alone is inconclusive (a failed install
+// The resolution diagnostic remains enabled. Its installation evidence is limited because the
+// prefix and postfix live in the same patch class, so silence alone is inconclusive (a failed install
 // removes both). Verification of the fix requires all three: (1) no [Init][ERR] for Partial_Patch at boot,
 // (2) the one-time "[ChargeFix] Active" line, (3) no subsequent "partial-cache" source line in MP.
-// Diagnostics log every charge-path resolution with SOURCE (exact-cache / partial-cache / computed),
+// Diagnostics log every charge-path resolution with source (exact-cache / partial-cache / computed),
 // caster, origin/destination, target id+position, and the resolved path's final node (read reflectively --
 // GraphNode lives in the A* assembly). Charges are rare, so every call logs.
 using System;
@@ -60,13 +58,9 @@ namespace MultiplayerStability
             }
         }
 
-        // THE FIX (v0.8.30 -- conviction threshold met without waiting for the capture): in
-        // MP, partial-cache reuse is disabled outright -- the lookup ignores the target entity whose
-        // occupancy shaped the cached path (aiming previews feed the same cache), so it can hand ONE client
-        // a preview-polluted path cut at the enemy's occupied node, and delivery writes Caster.Position to
-        // that node: the reported same-tile landings. Exact hits (caster/origin/destination/target-checked)
-        // stay; vanilla recomputes when no exact match exists -- precisely Dark Heresy's newer shape, which
-        // removed this lookup entirely. Solo untouched. The diagnostic postfix stays as the fix's validator:
+        // In multiplayer, partial-cache reuse is disabled because the lookup omits target identity.
+        // Exact target-checked hits remain enabled and vanilla recomputes when no exact match exists.
+        // Solo is unchanged. The diagnostic postfix remains enabled:
         // a "partial-cache" source line in MP would mean the fix is not holding.
         [HarmonyPatch(typeof(PathfindingService), "FindPartialCachedPath",
             typeof(UnitMovementAgentBase), typeof(Vector3), typeof(Vector3), typeof(bool))]

@@ -1,8 +1,8 @@
 # Release v0.8.32
 
 Build identity and verification data for the `v0.8.32` release. The installable artifact is attached
-to the [GitHub release](../../../releases/tag/v0.8.32); this document records exactly what it is and
-how to check it.
+to the [GitHub release](https://github.com/Sternab/MultiplayerStability/releases/tag/v0.8.32).
+This document records the source and artifact identity and explains how to verify it.
 
 Per-component validation status is in [PATCH-CATALOG.md](PATCH-CATALOG.md); several shipped fixes are
 still awaiting post-fix field validation ([KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md)).
@@ -11,7 +11,7 @@ still awaiting post-fix field validation ([KNOWN-LIMITATIONS.md](KNOWN-LIMITATIO
 
 | Item | Value |
 |---|---|
-| Release tag | `v0.8.32` = commit `3ab7a4a` — the exact source the released DLL was built from |
+| Release tag | `v0.8.32` = commit `3ab7a4a`, the source used to build the released DLL |
 | Manifest `UniqueName` / `Version` | `MultiplayerStability` / `0.8.32` |
 | Source files | 25 `.cs` (23 numbered components) plus Unity `.meta`, manifest, localization, docs |
 
@@ -30,14 +30,15 @@ python tools/verify-comments-only.py v0.8.32..main
 | Game version (all field sessions) | Warhammer 40,000: Rogue Trader `1.6.1.514` (Steam) |
 | Unity editor | `6000.0.64f1` |
 
-These are the assemblies the mod compiles against and the target checker reads. **Provenance matters:
-the modding template's reference assemblies are not byte-identical to the game install's.** All 57
+These are the assemblies the mod compiles against and the target checker reads. The modding
+template's reference assemblies are not byte-identical to the game installation assemblies. All 57
 documented target rows (55 patch targets plus 2 reflection dependencies the patches call into)
-resolve against either set — verified on both, plus the template-shipped original `Code.dll`.
+resolve against either set. This was verified against both sets and the original `Code.dll` shipped
+with the template.
 
 | Assembly | Source used here | Bytes | SHA-256 |
 |---|---|---|---|
-| `Code.dll` | template `Assets/RogueTraderAssemblies/` (see [BUILDING.md](BUILDING.md) — this copy is locally re-serialized) | 14,228,480 | `33002BB397EB044C3C2425F1342C5C21671023EA1989A7594B573E3879A33420` |
+| `Code.dll` | template `Assets/RogueTraderAssemblies/` (see [BUILDING.md](BUILDING.md); this copy is locally re-serialized) | 14,228,480 | `33002BB397EB044C3C2425F1342C5C21671023EA1989A7594B573E3879A33420` |
 | `RogueTrader.GameCore.dll` | template `Assets/RogueTraderAssemblies/` | 400,384 | `BA929D3AE15F013B42A18B043178C9217392CC60E409323353C37788C8F1D00B` |
 | `StatefulRandom.dll` | template (byte-identical to the game install's copy) | 14,848 | `49DB59F9CF63E89F03FC191B6D8E127C4DA0901174270066CE632261774007A4` |
 | `Owlcat.Runtime.Visual.dll` | **game install** `WH40KRT_Data/Managed/` (not present in the template) | 1,027,584 | `163CADDA6B8F0BF2D79D76270A804525584E0E2760F228C87C7F714E689582BD` |
@@ -67,9 +68,10 @@ Localization/enGB.json
 ```
 
 The copy installed on the field-test machine is a separate Unity build of the same tagged source: the
-manifest version matches, but its DLL hash differs (Unity builds are not bit-reproducible —
-MVID/timestamp metadata). All method bodies were verified identical by external review. The released
-DLL above is the authoritative binary.
+manifest version matches, but its DLL hash differs because Unity builds are not bit-reproducible
+(MVID and timestamp metadata). A method-body comparison verified that the two assemblies are identical
+apart from build metadata. The
+released DLL above is the authoritative binary.
 
 ## Verifying a download
 

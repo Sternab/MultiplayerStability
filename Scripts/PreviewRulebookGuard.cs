@@ -1,33 +1,31 @@
-// Preview rulebook guard -- the rulebook-HANDLER half of the preview-ghost fix (PreviewGhostFix is the
-// uuid-MINT half). A client-local UI PREVIEW unit (a "ghost" copy minted when a character/level-up screen is
-// opened; AbstractUnitEntity.IsPreviewUnit) stays subscribed to the GLOBAL rulebook, and its fact-component
-// handlers fire during REAL combat on the ONE machine that has the ghost -- a handler that mutates a shared
-// rule (e.g. a global damage modifier injecting into RuleRollDamage) then forks the RuleSystem stream ->
-// desync. Field-proven: a burst attack forked RuleSystem with PascalCompanion[PREVIEW] as the only anomaly.
+// Preview rulebook guard. This is the rulebook-handler half of the preview-unit fix;
+// PreviewGhostFix handles uuid allocation. A client-local preview unit created for a character or
+// level-up screen can remain subscribed to the global rulebook. Its fact-component handlers can then
+// run during combat only on the peer that created the preview. Capture evidence recorded a burst
+// attack that forked RuleSystem with PascalCompanion[PREVIEW] as the only associated anomaly.
 //
-// DESIGN (narrow registration-time guard). Credit: external review of the first cut (a broad reflection sweep
-// that patched every unit-owned global handler method + resolved owners during dispatch) correctly flagged
-// it as more blast radius than the evidence needs, and pointed out that the SUBSCRIBE site can resolve the
+// Design: narrow registration-time guard. The first implementation used a broad reflection sweep that
+// patched every unit-owned global handler method and resolved owners during dispatch. The subscribe site
+// provides the required owner information with a smaller behavioral surface:
 // owner via the proxy and skip preview-owned GLOBAL registrations centrally. Verified before adopting:
 //   - RulebookEventBus.Subscribe(IGlobalRulebookSubscriber, ISubscriptionProxy) (RulebookEventBus.cs:72) is
 //     the single point where a global rulebook handler enters GlobalRulebookSubscribers.
 //   - Owner IS resolvable there: fact-component handlers register with their ComponentRuntime as the proxy
 //     (EntityFactComponentDelegate.ComponentRuntime : ISubscriptionProxy), and ISubscriptionProxy.
 //     GetSubscribingEntity() returns the owner; the rare no-proxy path falls back to IEntitySubscriber.
-//   - TIMING holds (the thing that makes a registration guard actually fire): PartPreviewUnit is added during
+//   - PartPreviewUnit is added during
 //     CreateEntity under the PreviewUnit context (BaseUnitEntity.cs:916-918) BEFORE the preview copy calls
 //     Subscribe() (UnitHelper.CopyInternal:135), so IsPreviewUnit is already true at registration.
 //
-// So ONE cold patch (fires only when something subscribes) replaces ~30 hot per-handler patches: in MP, a
+// One registration patch replaces approximately 30 per-handler patches. In multiplayer, a
 // preview ghost's fact never enters GlobalRulebookSubscribers, so it can never fire during real combat.
 // Target/initiator/hooks registration is left untouched (a preview is never a real participant, so those are
 // already inert). Fail-open (any null/throw -> subscribe normally), MP-only (solo byte-identical vanilla),
-// and it logs each skip. A skip log POSITIVELY proves the patch is live; its ABSENCE is only meaningful when
-// the repro definitely produced a preview unit carrying a global rulebook handler -- otherwise "no skip" just
-// means no such ghost was present, not that the patch failed. INLINING caveat: the target is a small private
-// static, a JIT-inline candidate; patching at the enter point (before gameplay JIT) should prevent inlining
-// into Subscribe(object). If a controlled repro that definitely spawns such a ghost still logs no skip, the
-// prefix was bypassed -- move the patch to the public Subscribe(object) entry.
+// and it logs each skip. A skip log confirms runtime activation. An absent skip is meaningful only when
+// the reproduction created a preview unit carrying a global rulebook handler.
+// Inlining caveat: the target is a small private static method and a JIT-inline candidate. Patching at
+// startup should prevent inlining into Subscribe(object). If a controlled reproduction creates the
+// expected handler but logs no skip, move the patch to the public Subscribe(object) entry.
 using System;
 using HarmonyLib;
 using Kingmaker.Mechanics.Entities;   // AbstractUnitEntity

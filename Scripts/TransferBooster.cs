@@ -3,12 +3,12 @@
 // ~86 KB in flight) only refills when acks reach the sender, and acks only go out once per rendered
 // frame -- transfers run during loading screens at a few FPS. Two levers, measured 2026-07-02:
 //
-//   1. ACK PUMP: while a transfer runs, a background timer calls SendAcksOnly() every few ms so the
+//   1. Ack pump: while a transfer runs, a background timer calls SendAcksOnly() every few ms so the
 //      window turns over at network speed instead of frame speed. Same timer-thread pattern the game
 //      itself uses (Kingmaker.Networking.Tools.BackgroundPing). Client-local and safe on any subset of
 //      players; on the receiving side it is also what keeps the relay's per-client queue draining.
-//   2. BIGGER APP WINDOW: larger chunks + deeper send window (96 KB x 4 vs vanilla 48 KB x 3). Applied
-//      only when EVERY player in the room runs this mod: without fast receiver acks the Photon server
+//   2. Larger application window: larger chunks + deeper send window (96 KB x 4 vs vanilla 48 KB x 3).
+//      Applied only when every player in the room runs this mod: without fast receiver acks the Photon server
 //      buffers the excess and force-disconnects the receiver (observed live: 6x192 KB burst ->
 //      DisconnectByDisconnectMessage), so the boost is gated on the peer mod list.
 using System;

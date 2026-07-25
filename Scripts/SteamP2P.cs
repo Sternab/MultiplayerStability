@@ -1,10 +1,10 @@
-// Low-level Steam P2P transport. This is the ONLY file that touches the Steamworks API, so the rest of
-// the mod stays compile-safe on non-Steam builds paths (it just never calls in). Everything here runs on
+// Low-level Steam networking transport. This is the only file that touches the Steamworks API, keeping
+// the rest of the mod independent of Steamworks types. Everything here runs on
 // the Unity main thread: the receive pump lives in a mod MonoBehaviour's Update, and Steam's session
 // callbacks fire inside the game's own SteamAPI.RunCallbacks (SteamManager.Update) which is main-thread.
 //
-// Reliable ordered messaging over one dedicated channel. Session requests are accepted ONLY from Steam IDs
-// we are actively expecting (anti-spoof). We never pump RunCallbacks ourselves -- the game already does.
+// Reliable ordered messaging uses one dedicated channel. Session requests are accepted only from
+// expected Steam IDs. The game owns SteamAPI.RunCallbacks; this component does not pump it.
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -66,10 +66,10 @@ namespace MultiplayerStability
                 return;
             s_sessionReq = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequest);
             s_sessionFailed = Callback<SteamNetworkingMessagesSessionFailed_t>.Create(OnSessionFailed);
-            // Valve's transport sends at a FIXED rate = clamp(256KB/s, SendRateMin, SendRateMax) — upward
+            // Valve's transport sends at a FIXED rate = clamp(256KB/s, SendRateMin, SendRateMax); upward
             // bandwidth probing is not implemented (proven by field tests 2-5: the live rate always equals
-            // the floor, and a too-high floor just blasts into loss with no backoff). So the floor is OUR
-            // rate knob: the transfer code adapts it live via SetSendRateFloor while watching delivery.
+            // the floor, and a high floor causes loss without backoff). The transfer code adapts this
+            // value through SetSendRateFloor while monitoring delivery.
             SetSendRateFloor(1024 * 1024);
             SetGlobalConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax, 64 * 1024 * 1024);
             SetGlobalConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendBufferSize, 4 * 1024 * 1024);
@@ -132,7 +132,7 @@ namespace MultiplayerStability
         // show what actually limits throughput (negotiated send rate, wire rate, queued reliable bytes).
         // Reflected, not compiled: the status struct was renamed between the Steamworks.NET version this
         // project compiles against (SteamNetworkingQuickConnectionStatus, pkg 20.0.0) and the one the game
-        // ships (SteamNetConnectionRealTimeStatus_t) — same fields, so we bind at runtime by name.
+        // ships (SteamNetConnectionRealTimeStatus_t); same fields, so we bind at runtime by name.
         private static System.Reflection.MethodInfo s_statsMethod;
         private static bool s_statsMethodMissing;
         private static System.Reflection.FieldInfo s_fPing, s_fRate, s_fWire, s_fPend;

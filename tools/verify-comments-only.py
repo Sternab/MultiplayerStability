@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verify-comments-only.py -- prove that a range of commits changed comments only.
+"""verify-comments-only.py -- verify that a range of commits changed comments only.
 
 Tokenizes each changed C# file before and after, strips comments and normalizes whitespace, then
 compares. Identical stripped forms mean no executable statement changed. String and character
@@ -9,13 +9,13 @@ string is never mistaken for a comment.
 Usage (run from the repository root):
     python tools/verify-comments-only.py [<git-range>]
 
-    <git-range> defaults to "v0.8.32..HEAD" -- the documentation and comment work sitting on top of
-    the tagged build this package ships. Also accepts A..B, A...B (compares from the merge base) and
+    <git-range> defaults to "v0.8.32..HEAD", the current source delta from the tagged release.
+    Also accepts A..B, A...B (compares from the merge base) and
     a bare revision (compares that revision against the current working tree). Both sides of a
     two-dot or three-dot range are read from git, never from the working tree.
 
-Exit code 0 = comments only; 1 = at least one file's executable content differs. This is the check
-cited by HANDOFF-MANIFEST.md and by the handoff package's README.
+Exit code 0 = comments only; 1 = at least one file's executable content differs. This check is
+documented in docs/TESTING.md and docs/RELEASE-0.8.32.md.
 """
 import io
 import subprocess

@@ -1,31 +1,29 @@
-// Projectile POSITION fix -- the geometry half of the projectile family (ProjectileRngFix is the RNG half).
+// Projectile position fix. ProjectileRngFix handles stream advancement; this component handles geometry.
 //
-// Doctrine (from the Solasta comparison): view state -- camera, fog, renderers, animation
-// BONES, View availability -- may control presentation only; MECHANICAL positions must come from
+// View state, including camera, fog, renderers, animation bones, and View availability, may differ
+// between peers. Mechanical positions therefore need to come from
 // entity/grid state or deterministic offsets. Solasta carries visual and deterministic positions separately
 // (WorldLocationCharacter reconstructs bones from deterministic position; miss/travel math never reads live
 // transforms). Rogue Trader instead feeds live view-bone transforms into mechanics in three places:
 //
 //  1. Projectile.GetTargetPoint (:328): if a target locator bone was stored at launch (only possible when
-//     the target's View had a ParticlesSnapMap -- view presence is CLIENT-LOCAL), returns the bone's LIVE
-//     transform position. That point feeds ricochet leg selection and grenade PUSH DIRECTION
+//     the target's View had a ParticlesSnapMap), returns the bone's live
+//     transform position. That point feeds ricochet leg selection and grenade push direction
 //     (ContextActionPush :72). ProjectileRngFix aligned the RNG streams but a client with the SnapMap and a
-//     client without still compute DIFFERENT mechanical geometry with identical RNG state.
+//     client without still compute different mechanical geometry with identical RNG state.
 //  2. Projectile.GetTargetPointForStarship (:347, the long-open sibling): draws a hashed Projectiles-stream
-//     hull point -- but ONLY when a StarshipView exists (client-local), and then multiplies live transforms.
+//     hull point only when a StarshipView exists, and then multiplies live transforms.
 //  3. AbilityProjectileAttackLineHelper.TryGetTargetPointByRandomLocator (:248): ParticlesSnapMap-gated
 //     hashed draw (PFStatefulRandom.UnitLogic.Abilities) over torso locators, then the live bone position
 //     steers the attack line.
 //
-// FIX: in multiplayer, every site takes its own ENGINE-PRECEDENTED no-view fallback (the exact code path
-// vanilla already runs whenever the view/SnapMap is absent -- tested behavior, no invented geometry):
+// Fix: in multiplayer, every site takes its existing no-view fallback:
 //   GetTargetPoint -> Target.Point + m_MisdirectionOffset (vanilla :343);
 //   starship        -> Position + Vector3.up               (vanilla :352, the null-StarshipView branch);
 //   random locator  -> return false                        (callers use the deterministic node+1m path).
-// This also finally retires the starship sibling (and its conditional hashed draw) flagged since
-// ProjectileRngFix shipped. Visual cost in MP: projectiles aim at the target's base point instead of a
-// random bone -- identical to what vanilla already shows for any SnapMap-less target. Solo is vanilla
-// (all prefixes return true outside multiplayer); fail-open on any exception.
+// This also covers the starship conditional draw. In multiplayer, projectiles aim at the target's base
+// point instead of a random bone, matching vanilla behavior for a SnapMap-less target. Solo is unchanged;
+// all prefixes fail open on exception.
 using System;
 using HarmonyLib;
 using Kingmaker.Controllers.Projectiles;

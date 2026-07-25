@@ -1,29 +1,26 @@
-// Weather combat-exit DIAGNOSTIC -- log-only instrumentation for the second weather determinism bug
-// (capture "0.8.17 SECOND"): at combat end (tick 7595434, FakeEmperorAppear), one
+// Weather combat-exit diagnostic (capture "0.8.17 SECOND"). At combat end
+// (tick 7595434, FakeEmperorAppear), one
 // client drew the hashed Weather stream once more than the other; Player.Weather/Wind.NextWeatherChange
-// are in the player hash, so the player bucket forked first, then randomState, persisting.
+// are in the player hash, so the player bucket diverged before randomState.
 //
-// Suspected mechanism (verified in decompile): WeatherController.HandlePartyCombatStateChanged(false)
+// WeatherController.HandlePartyCombatStateChanged(false)
 // (:320) chooses post-combat weather/wind inclemency from VFXWeatherSystem.Instance.IsProfileOverriden --
-// a VISUAL-system flag (Channel B on the simulation path) -- plus the veil counter and CurrentWeatherEffect,
-// then calls SetNewInclemency on the WEATHER controller iff its TargetInclemency differs and on the WIND
-// controller iff its TargetInclemency differs (:347-:354). Each call draws hashed PFStatefulRandom.Weather
-// and writes hashed player fields. The capture cannot distinguish WHICH predicate differed, so this logs
-// EVERY gating input: both controllers' TargetInclemency, the profile-override flag, the veil counter,
-// CurrentWeatherEffect -- plus pre->post Weather fingerprints per SetNewInclemency call, attributed to
-// weather vs wind via the controller's m_WeatherData reference. The next two-sided capture with a combat
-// in a veil-affected area names the differing predicate directly.
+// a visual-system flag -- plus the veil counter and CurrentWeatherEffect,
+// then calls SetNewInclemency on the weather controller if its TargetInclemency differs and on the wind
+// controller if its TargetInclemency differs (:347-:354). Each call draws hashed PFStatefulRandom.Weather
+// and writes hashed player fields. The diagnostic logs both controllers' TargetInclemency values, the
+// profile-override flag, veil counter, CurrentWeatherEffect, and pre/post Weather fingerprints for each
+// SetNewInclemency call. Controller identity comes from the m_WeatherData reference.
 //
-// Deliberately NOT a fix. Do NOT wrap this path in DisableStatefulRandomContext: the draws write into
-// HASHED player fields, so diverting them to client-random fallback values would write different values on
-// each machine and make the fork worse (explicit review warning).
+// This component does not change behavior. Do not use DisableStatefulRandomContext here: these draws
+// write hashed player fields, so client-random fallback values would introduce a direct state divergence.
 //
-// Compile-safety: InclemencyType, IsProfileOverriden, and TargetInclemency's return type all live in
-// Owlcat.Runtime.Visual (NOT a template reference assembly) -- every such member is accessed reflectively;
-// CurrentWeatherEffect is a public FIELD (not property; review catch -- AccessTools.Field, not .Property).
+// InclemencyType, IsProfileOverriden, and TargetInclemency's return type live in Owlcat.Runtime.Visual,
+// which is not a template reference assembly, so those members are accessed reflectively.
+// CurrentWeatherEffect is a public field, not a property.
 //
-// Log-only -> subset-safe. MP-gated to keep solo logs quiet (mid-session instrumentation, not
-// teardown-path -- the 0.8.17 gate lesson does not apply).
+// Log-only and subset-safe. MP-gated to keep solo logs quiet (mid-session instrumentation, not
+// teardown path, so the 0.8.17 departure-gate issue does not apply).
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -42,7 +39,7 @@ namespace MultiplayerStability
     {
         private static IEnumerable<MethodBase> TargetMethods()
         {
-            // Explicit signature (the 0.8.13 lesson).
+            // Use the explicit signature to avoid ambiguous overload resolution.
             var handle = AccessTools.Method(typeof(WeatherController), "HandlePartyCombatStateChanged",
                 new[] { typeof(bool) });
             if (handle != null)

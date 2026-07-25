@@ -1,20 +1,16 @@
-// First root-cause desync fix: weather VFX drain the HASHED PFStatefulRandom.Weather stream once per
-// RENDERED frame (WeatherMinMaxRateSpawnController.Update rolls per frame with Time.deltaTime timing;
+// Weather VFX RNG fix. Weather effects drain the hashed PFStatefulRandom.Weather stream once per
+// rendered frame (WeatherMinMaxRateSpawnController.Update rolls per frame with Time.deltaTime timing;
 // WeatherLightningBoltController.Spawn rolls twice per bolt) -- two co-op clients at different frame
-// rates silently diverge the randomState hash in any stormy area. Verified hazard; matches community
-// reports of area-dependent desyncs.
+// rates can diverge the randomState hash in a weather area.
 //
 // Fix: wrap the single render-loop driver of all weather effect controllers (VFXWeatherSystem.Update)
-// in the engine's own DisableStatefulRandomContext guard -- under it Rand.Get returns UnityEngine.Random
-// values WITHOUT advancing the hashed stream (the exact pattern UnitDescriptionHelper uses for UI rolls).
+// in DisableStatefulRandomContext. Under it, Rand.Get returns UnityEngine.Random values without
+// advancing the hashed stream (the same pattern UnitDescriptionHelper uses for UI rolls).
 // The deterministic sim consumers of the same stream (InclemencyController via WeatherController.Tick)
 // run in the simulation tick, never inside this Unity Update, so they are untouched.
 //
-// Peer-compatibility: EXACT PARITY REQUIRED (like every sim/RNG-changing fix). Technical nuance: a mixed
-// install is not *worse* than vanilla here (two vanilla clients already drain divergently at their own
-// framerates; one modded client just drains zero) -- but it fixes nothing either, and advertising subset
-// safety invites the mixed sessions the parity rule exists to prevent. Both machines modded = streams stop
-// diverging entirely (field-validated).
+// Peer compatibility: exact parity required. A mixed install does not repair the stream behavior and is
+// unsupported. Post-fix paired captures kept the Weather stream synchronized.
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;

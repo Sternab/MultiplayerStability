@@ -1,36 +1,36 @@
 // Preview ghost fix -- facts applied to PREVIEW units must not draw from the hashed uuid stream, and
 // preview units must not count as aura members.
 //
-// The game creates full unit copies for UI purposes -- inventory/character-screen dolls, level-up plan
-// units (LevelUpPlanUnitHolder.RequestPlan) -- CLIENT-LOCALLY (only on the machine whose UI asked). Their
-// creation was only PARTIALLY stream-safe in vanilla (the DisableStatefulRandomContext scope closed before
-// CopyItems, so preview ITEMS still minted hashed uuids -- proven by capture 0.8.23 and closed by the third
+// The game creates full unit copies for UI purposes -- inventory/character-screen dolls and level-up plan
+// units (LevelUpPlanUnitHolder.RequestPlan) -- only on the machine whose UI requested them. Their
+// creation was partially stream-safe in vanilla (the DisableStatefulRandomContext scope closed before
+// CopyItems, so preview items still minted hashed uuids, as recorded in capture 0.8.23 and addressed by the third
 // patch below), and UnitHelper.CopyInternal
-// SUBSCRIBES the copy to the event bus at the end, so these ghosts keep REACTING to game events forever
-// after: at combat start the pet system applies its control buffs to a preview pet, all-ally auras
+// subscribes the copy to the event bus at the end, so these copies continue reacting to game events:
+// at combat start the pet system applies its control buffs to a preview pet, all-ally auras
 // (Adept Joint Offence, Passive Learning) buff the preview player unit, etc. Those later fact attaches
-// run OUTSIDE any safety context -> each mints a UniqueId from the hashed GlobalUuid stream -> the
-// machine with the ghost draws extra -> permanent randomState fork at every combat start.
+// run outside any safety context. Each attach mints a UniqueId from the hashed GlobalUuid stream, so
+// the machine with the preview copy advances the stream and creates a permanent randomState fork.
 //
-// Field-proven by capture 14 (2026-07-05, space combat, both v0.6.8): the ONLY asymmetric mints were
+// Capture 14 (2026-07-05, space combat, both v0.6.8) recorded four asymmetric mints:
 // 4 pet-system buffs on Master_ArbitesCyberMastiff_PetUnit[PREVIEW] / StartGame_Player_Unit[PREVIEW],
 // host-only (+4 GlobalUuid draws at combat start) -- the same +4 signature as the earlier "Pascal fights
-// always desync" captures (his all-ally auras were simply the loudest ghost-buffing system).
+// always desync" captures.
 //
 // Three patches:
 //   A. EntityFact.Attach on a preview-owned fact runs inside DisableStatefulRandomContext in multiplayer:
 //      the buff still applies (previews keep working for the UI), but its id comes from the non-hashed
-//      fallback -- consistent with previews being entirely OUTSIDE hashed state (scene-entity dumps show
-//      they are not hashed). Context released in a FINALIZER (postfixes are skipped on throw; an
-//      unbalanced Request would make ALL stateful RNG nondeterministic -- the worst possible failure).
+//      fallback, consistent with previews being outside hashed state (scene-entity dumps show
+//      they are not hashed). Context is released in a finalizer so exceptions cannot leave
+//      DisableStatefulRandomContext active.
 //   B. AreaEffectEntity.ShouldUnitBeInside returns false for preview units in multiplayer: ghosts must
 //      not be aura MEMBERS at all -- membership also feeds count-scaled magnitudes (Hive World's
 //      The More The Merrier), which would fork stat values even with stream-safe ids.
 //   C. (v0.8.24) The whole public UnitHelper.Copy(..., preview: true) holds the context in MP, closing
 //      vanilla's own scope hole over CopyItems/CopyFacts/view creation.
 //
-// Solo untouched (all three patches gate on IsMultiplayer). Peer-compatibility: EXACT PARITY REQUIRED,
-// like every sim/RNG-changing fix (see the PATCH-CATALOG.md peer-compatibility categories).
+// Solo untouched (all three patches gate on IsMultiplayer). Peer compatibility: exact parity required,
+// like every sim/RNG-changing fix (see the docs/PATCH-CATALOG.md peer-compatibility categories).
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;
@@ -84,7 +84,7 @@ namespace MultiplayerStability
             catch (Exception e)
             {
                 // A stuck DisableStatefulRandomContext would contaminate EVERY subsequent hashed draw --
-                // the one failure here that must never pass silently (review catch).
+                // this failure must not pass silently.
                 MultiplayerStabilityMain.Log("[GhostFix][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
             }
             return __exception;
@@ -98,7 +98,7 @@ namespace MultiplayerStability
 
         // The owner is read from the `manager` PARAMETER, not __instance.Owner: Attach assigns the manager
         // INSIDE the call (EntityFact.cs:874) before minting the id (:877), so at prefix time
-        // __instance.Owner is still null. v1 of this patch read __instance.Owner and silently never armed
+        // __instance.Owner is still null. v1 of this patch read __instance.Owner and never activated
         // (field-caught: capture 15 showed the +4 fork alive on 0.6.9 with zero [GhostFix] lines).
         private static void Prefix(EntityFactsManager manager, out IDisposable __state)
         {

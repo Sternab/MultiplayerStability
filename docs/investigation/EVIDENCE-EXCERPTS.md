@@ -1,16 +1,16 @@
-# Evidence excerpts — sanitized capture extracts with source hashes
+# Evidence Excerpts
 
-Small verbatim extracts from the strongest two-sided captures, so the core convictions can be
-audited without the multi-GB raw logs. Every quoted line is checked against the hashed source file
-at generation time: the generator (`tools/build-evidence-excerpts.py`, in this repository)
+This document contains small, verbatim extracts from selected two-sided captures. It provides
+reviewable evidence without publishing the multi-GB raw logs. Every quoted line is checked against
+the hashed source file at generation time. The generator (`tools/build-evidence-excerpts.py`)
 asserts an exact substring match and fails rather than emit an unverified quote.
 
 **Raw captures and redaction.** The raw logs are retained by the author. They contain Windows
 usernames and Steam IDs belonging both to the author and to other players, so they are available
 on request only in redacted form: identifiers replaced with positional labels, no log-line content
 altered. Each table below records the SHA-256 of the RAW archived file; a redacted copy is
-delivered with its own SHA-256. Redaction cannot affect the quoted lines below - they were selected
-to contain no identifiers - so every quote stays verbatim-checkable against either copy.
+delivered with its own SHA-256. The quoted lines contain no identifiers, so each quote remains
+verifiable against either copy.
 
 Third-party-mod log lines containing other players' local paths are excluded from these extracts.
 
@@ -18,7 +18,7 @@ Machine labels (HOST/CLIENT/PEER-x) are positional, not identities. All captures
 
 ---
 
-## E-DLG · Dialogue UI RNG (capture 0.8.8) — conviction
+## E-DLG: Dialogue UI RNG (capture 0.8.8, confirmed)
 
 | File | SHA-256 |
 |---|---|
@@ -40,7 +40,7 @@ The client's RNG-fingerprint ring shows `DialogSystem` advancing just before the
   t3060964: DialogSystem:3C5A0317
 ```
 
-The host's ring for the same episode contains **no `DialogSystem` entries at all** — only:
+The host's ring for the same episode contains **no `DialogSystem` entries**:
 
 ```
 [11.07.2026 00:09:04:943 - MultiplayerStability][Message]: [MPStability] [DesyncWatch] rng streams advanced near tick 3060966:
@@ -49,12 +49,12 @@ The host's ring for the same episode contains **no `DialogSystem` entries at all
   t3060833: Weather:CB255DFC
 ```
 
-One-sided `DialogSystem` movement at view time is exactly the C16 defect; the fix's post-fix
+One-sided `DialogSystem` movement at view time supports the C16 diagnosis. The post-fix
 validation record is separate (see `../EVIDENCE-MATRIX.md`).
 
 ---
 
-## E-WEX · Weather combat-exit, one draw ahead (capture 0.8.17-SECOND) — open investigation (C19)
+## E-WEX: Weather combat-exit (capture 0.8.17-SECOND, open investigation C19)
 
 | File | SHA-256 |
 |---|---|
@@ -62,7 +62,7 @@ validation record is separate (see `../EVIDENCE-MATRIX.md`).
 | PEER-B `GameLogFull (32).txt` (1,643,899 B) | `75A31E0CD3D7015D186F03581EEA682813375B2311B51FA73FBB958653E67ADC` |
 
 Last common `Weather` fingerprint at t7595433; at t7595434 the streams differ; PEER-B reaches
-PEER-A's t7595434 value six ticks later — one side is exactly one draw ahead:
+PEER-A's t7595434 value six ticks later. One side is exactly one draw ahead:
 
 ```
 PEER-A:    t7595433: Weather:3B82177B,GlobalUuid:B162DC24
@@ -82,14 +82,14 @@ immediately after:
 
 ---
 
-## E-TRP · Trap/pause command-lifecycle storm (capture 0.8.xx) — conviction for the C20 containment
+## E-TRP: Trap/pause command lifecycle (capture 0.8.xx, supports C20)
 
 | File | SHA-256 |
 |---|---|
 | PEER-A `GameLogFull (34).txt` (26,807,379 B) | `E08629529D638413D357AEE7A782639490FFB2F9FEB4FF0178F38E7935C769EA` |
 | PEER-B `GameLogFull (4) (1).txt` (42,266,885 B) | `F1417F7613827BA43C78954436EC8A8D41DECE919332A63644D8C4EFD1B52153` |
 
-Whole-file counts of the residual-command exception (mechanically recountable with grep):
+Whole-file counts of the residual-command exception (recountable with grep):
 
 ```
 PEER-A:  'Cmd is already set' x 107
@@ -99,9 +99,9 @@ PEER-B:  'Cmd is already set' x 514
 (The catalog's 72-vs-10 trap-NRE figure is an episode-window count from the analysis of this
 capture, not a whole-file grep; the 514-vs-107 residual counts above reproduce exactly.)
 
-The diagnostic names the mechanism in one line — paused window, visible unit, missing IK graph,
-NRE thrown AFTER the hashed sim orientation write — and the same `(tick, unit, seq)` key appears
-on both peers (the cross-peer record-matching contract):
+The diagnostic records a paused window, a visible unit, a missing IK graph, and an NRE after the
+hashed simulation orientation write. The same `(tick, unit, seq)` key appears on both peers,
+allowing direct record comparison:
 
 ```
 PEER-A:  [23.07.2026 17:31:25:678 - MultiplayerStability][Message]: [MPStability] [TrapDiag] ForceRotateToDesired(paused) unit=8b13291056a05e7ea4cbd93a74b80181 tick=7795963 seq=0 view=True visible=True vt=True ik=ok
@@ -110,12 +110,12 @@ PEER-B:  [23.07.2026 17:31:23:661 - MultiplayerStability][Message]: [MPStability
          System.Exception: Cmd is already set
 ```
 
-The earlier 0.8.19 capture (first instrumented occurrence, same shape) is hashed for completeness:
+Hashes for the earlier 0.8.19 capture of the same behavior:
 `C6F3D334BE649603BCB6B04321D05388456CE7DCDD36C5C671525C3D46D42173` (PEER-A), `E1AFCECD6783D4A4378A08E00CA221A7E705F31F8A1F3621609514A007A126BA` (PEER-B).
 
 ---
 
-## E-BRK · Player-bucket fork at the augmentation screen (capture 0.8.23) — conviction for C21
+## E-BRK: Augmentation-screen player-bucket fork (capture 0.8.23, supports C21)
 
 | File | SHA-256 |
 |---|---|
@@ -131,7 +131,7 @@ A sustained `player`-bucket fork, identically attributed on both machines:
 ```
 
 `Player.PlayedBanters` is in the player hash; the augmentation screen's bark write was the
-convicted one-sided writer (mechanism chain in `../EVIDENCE-MATRIX.md` and the C21 catalog entry;
+identified one-sided write (mechanism chain in `../EVIDENCE-MATRIX.md` and the C21 catalog entry;
 the fix itself is Mechanism confirmed; post-fix validation pending).
 
 ---

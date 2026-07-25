@@ -1,23 +1,21 @@
-// Idle-animation RNG fix -- the Animation3 flapper class, root-caused at last (three-machine capture
-// 0.8.10; every claim re-verified in the decompile before building).
+// Idle-animation RNG fix for the Animation3 transition class (three-machine capture 0.8.10; targets
+// and behavior verified against the decompiled source before implementation).
 //
-// AnimationManager.StatefulRandom (AnimationManager.cs:32) maps to PFStatefulRandom.Visuals.Animation3 --
-// which IS in the serialized/HASHED randomState set. Unit idle variety draws it on the view/animation
+// AnimationManager.StatefulRandom (AnimationManager.cs:32) maps to PFStatefulRandom.Visuals.Animation3,
+// which is in the serialized randomState set. Unit idle variety draws it on the view/animation
 // clock: micro-idle triggers, variant-idle rerolls, idle speed jitter. Idle timing is inherently
-// client-local (who is on-screen, animator update cadence), so two machines draw the SAME values a few
-// ticks apart -- transient randState skew that re-converges (the classic "Animation3 flapper" behind most
-// transition-window desync noise since the campaign began) and, when draws recur while skewed (capture
-// 0.8.10: P3 drew 34A6B1A7 @1662981, host/P2 @1662994), escalates to a SERIOUS desync with every other
+// client-local (who is on-screen, animator update cadence), so two machines can draw the same values a few
+// ticks apart. This creates transient randomState skew that normally converges, but recurring draws can
+// make it persist (capture 0.8.10: P3 drew 34A6B1A7 @1662981, host/P2 @1662994) while every other
 // stream and entity hash agreeing.
 //
-// The engine itself says idle RNG should not be hashed: PFStatefulRandom.Visuals.AnimationIdle exists and
-// is EXPLICITLY excluded from the serialized set (PFStatefulRandom.cs:97) -- the designated non-hashed
-// idle stream. The idle call graph just uses the wrong property.
+// PFStatefulRandom.Visuals.AnimationIdle is excluded from the serialized set
+// (PFStatefulRandom.cs:97) and is the non-hashed idle stream.
 //
-// FIX: in multiplayer, reroute ONLY the idle call graph to AnimationIdle -- a transpiler on the four idle
+// Fix: in multiplayer, reroute only the idle call graph to AnimationIdle. A transpiler on the four idle
 // sites swaps the get_StatefulRandom call for a helper (solo: the real property, vanilla byte-identical;
-// MP: AnimationIdle). Idle variety is preserved (real RNG, per-machine -- it is pure view), and the hashed
-// Animation3 stream simply stops moving on the idle path, killing the flapper class at the source.
+// MP: AnimationIdle). Idle variety is preserved per machine, and the idle path no longer advances the
+// hashed Animation3 stream.
 //
 //   1. UnitAnimationManager.TickIdleVariants  (draws :819/:824/:827/:853/:858 -- triggers + speed jitter)
 //   2. UnitAnimationManager.OnAnimationSetChanged (:1071 -- retrigger tracker rebuild)
@@ -29,8 +27,8 @@
 // same treatment but need their own audit (they fire inside synced combat execution, where the hashed draw
 // is symmetric and harmless unless proven otherwise). Do not widen this patch to them without a capture.
 //
-// Both-required: a modded-vs-vanilla pair would advance Animation3 on one machine only -- permanent skew,
-// worse than the transient vanilla flapper. Standard manual mod-parity applies. Fail-open per site: pattern
+// Exact parity required: a modded-vs-vanilla pair would advance Animation3 on one machine only.
+// Standard manual mod parity applies. Fail-open per site: pattern
 // not found -> original IL unchanged + loud log.
 using System;
 using System.Collections.Generic;

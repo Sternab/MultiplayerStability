@@ -1,22 +1,14 @@
 // Fog gate fix -- mechanics decisions must not read client-local fog-of-war in multiplayer.
 //
 // Entity.IsInFogOfWar is a cached flag written by each client's own fog reveal (Entity.cs:346 -- the
-// setter is driven from the view layer), so two co-op machines legitimately disagree on it. Two MECHANICS
-// decisions read it anyway:
-//
-//   1. AreaEffectEntity.ShouldUnitBeInside (AreaEffectEntity.cs:718) -- decides which units a persistent
-//      area effect covers, i.e. which units get its buff FACTS. Field-verified culprit shape (capture 5,
-//      2026-07-03): combat-start buff shower identical on both clients, then exactly ONE GlobalUuid draw
-//      diverged on the following tick -- the tick the freshly-spawned auras (HiveWorld_TheMoreTheMerrier,
-//      Executioner_Talent05) first evaluated membership. A fogged-on-one-client bystander was counted by
-//      one machine only -> one extra buff entity -> permanent uuid-stream fork (creation COUNTS differ,
-//      so the stream never re-converges).
-//   2. UnitCombatJoinController.ShouldStartCombat (UnitCombatJoinController.cs:221) -- fog gates when an
-//      NPC may open combat against a non-player target. Same hazard shape at cutscene->combat handoffs.
-//   3. LOSGetter.GetBaseValue (LOSGetter.cs) -- a mechanics PropertyGetter that returns 1/0 (drives a
-//      buff apply/remove, e.g. Augment_Eye_Solomorne) gated on baseUnitEntity.IsVisibleForPlayer
-//      (= !IsInFogOfWar && View.IsVisible -- client-local fog AND render visibility). Its own HasLOS check
-//      on the same line is the deterministic geometry gate; the visibility term is the only client-local one.
+// setter is driven from the view layer), so two co-op machines can disagree on it. Six mechanics paths
+// read this state:
+//   1. AreaEffectEntity.ShouldUnitBeInside (aura membership and buff facts).
+//   2. UnitCombatJoinController.ShouldStartCombat (NPC combat entry).
+//   3. LOSGetter.GetBaseValue (buff apply/remove; keeps the deterministic HasLOS check).
+//   4. UnitMovementAgentBase.TickMovement (8x movement speed and heading snap).
+//   5. PartyAwarenessController.Tick (awareness rolls, XP, and trap triggers).
+//   6. RicochetHelper.GetPossibleRicochetTargets (candidate filtering).
 //
 // Fix: in multiplayer, every targeted site drops the client-local term. Fog readers treat units as NOT
 // fogged (get_IsInFogOfWar -> FogForMechanics); the LOS getter treats units as visible (get_IsVisibleFor
@@ -25,14 +17,8 @@
 // MP). Transpiler call-swap on the getters, same pattern as ProjectileRngFix; patched at mod init (before
 // first gameplay JIT). Internal types (LOSGetter, RicochetHelper) are resolved by name.
 //
-// Current sites (see TargetMethods): ShouldUnitBeInside, ShouldStartCombat, LOSGetter.GetBaseValue,
-// UnitMovementAgentBase.TickMovement (fog 8x speed + heading snap), PartyAwarenessController.Tick
-// (fog-gated awareness rolls), RicochetHelper.GetPossibleRicochetTargets (fog-filtered candidates).
-// NOT here: TurnController.SetTime uses a DIFFERENT policy (frustum substitution, LocalTimeScaleFix.cs).
-//
-// NOTE: both machines must run the mod (the standing install rule). A modded-vs-vanilla pair would gate
-// DIFFERENTLY wherever a unit is genuinely fogged on the vanilla side -- worse than vanilla-vs-vanilla,
-// where both clients' fog usually agrees.
+// TurnController.SetTime uses a separate always-1x multiplayer policy in LocalTimeScaleFix.cs.
+// Exact parity is required because a mixed install evaluates different mechanics predicates.
 using System;
 using System.Collections.Generic;
 using System.Reflection;

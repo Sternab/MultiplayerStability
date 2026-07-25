@@ -1,72 +1,70 @@
-# MultiplayerStability — Technical Overview
+# MultiplayerStability Technical Overview
 
-One page. Everything else links from here.
+## Scope
 
-## What this is
-
-A field-driven investigation of Rogue Trader co-op desyncs, packaged as an OwlcatModification
-(Harmony). Across instrumented two- and three-player sessions it identified, and where safely
-possible fixed, systematic violations of the lockstep contract: client-local state reaching the
-synchronized simulation. **v0.8.32 is the current release, built from tag `v0.8.32`**; that build has not completed post-fix
-field validation.
+MultiplayerStability is an OwlcatModification that instruments Rogue Trader's lockstep simulation
+and applies targeted Harmony patches for confirmed desync causes. Analysis of two-player and
+three-player captures found repeated cases where client-local state affected synchronized state.
+**v0.8.32 is the current release and was built from tag `v0.8.32`.** That build has not completed
+post-fix field validation.
 Per-component validation status is tracked individually in `PATCH-CATALOG.md`;
 `RELEASE-0.8.32.md` holds the exact artifact identity.
 
-## The one-sentence thesis
+## Summary
 
 Across the captures reviewed on game build `1.6.1.514`, the recurring divergence pattern is
 **client-local input (fog, camera, render visibility, view objects/bones, UI refresh timing, Unity
-physics/trigger callbacks, cache pollution from aiming previews) entering hashed simulation state** —
-and each prevention fix here either severs one such path or makes the affected decision derive from
+physics and trigger callbacks, and cache pollution from aiming previews) entering hashed simulation
+state**. Each prevention fix either removes one of these inputs or derives the decision from
 synchronized state. Open items that do not yet fit this pattern are listed in
 `KNOWN-LIMITATIONS.md`.
 
 ## Reading order
 
-1. **`PATCH-CATALOG.md`** — all 23 components: target methods, observed vanilla defect, the mod's
-   intervention, validation status, and a root-cause note locating each defect's origin.
-2. **`EVIDENCE-MATRIX.md`** — symptom → mechanism → fix → validation traceability with capture
+1. **`PATCH-CATALOG.md`:** all 23 components, including target methods, observed engine behavior,
+   intervention, validation status, and a source note locating the relevant engine path.
+2. **`EVIDENCE-MATRIX.md`:** symptom, mechanism, fix, and validation traceability with capture
    references and first-divergent-tick data.
-3. **`KNOWN-LIMITATIONS.md`** — what is *not* proven, untested configurations, and open
+3. **`KNOWN-LIMITATIONS.md`:** unproven behavior, untested configurations, and open
    investigations (two instrumented-but-unfixed classes ship in this build as log-only diagnostics).
 
 ## Categories at a glance
 
-- **Engine-origin defect classes** (root cause in engine code; the mod intervenes downstream):
-  weather RNG (2 classes), projectile RNG + geometry, dialogue UI RNG (3 call sites), idle-animation
+- **Engine code paths:** behavior originates in engine code; the mod applies a downstream patch.
+  Weather RNG (2 classes), projectile RNG and geometry, dialogue UI RNG (3 call sites), idle-animation
   RNG stream selection, awake-census determinism, fog-gated mechanics reads (6 sites), local
   time-scale writers, physics-order nondeterminism, preview-unit isolation (3 mechanisms),
   charge-path partial cache, paused-command IK NRE, bark/`PlayedBanters` UI write, preview-copy RNG
   scope.
-- **Diagnostic tooling**: out-of-tick hashed-RNG leak detector, per-bucket desync attribution +
-  RNG/entity fingerprint rings, and four armed scoped diagnostics.
-- **Mod-only infrastructure** (specific to running as a mod): Steam P2P save-transfer side channel,
+- **Diagnostic tooling:** out-of-tick hashed-RNG leak detector, per-bucket desync attribution,
+  RNG/entity fingerprint rings, and four active scoped diagnostics.
+- **Mod-only infrastructure:** Steam P2P save-transfer side channel,
   Photon ack-pump, sequenced loading barriers, per-class patch isolation.
 
-## Ground rules this project follows
+## Design constraints
 
-- **No auto-resync** — recovery stays the player's choice; the mod diagnoses and prevents.
-- **Best-effort fail-open** — patching is isolated per class, and runtime guards fall back to the
+- **No automatic resync:** recovery stays under player control.
+- **Best-effort fail-open:** patching is isolated per class, and runtime guards fall back to the
   vanilla path at their own site; a component spanning several classes or targets can be left
   partially active (details and residual risks in `KNOWN-LIMITATIONS.md`).
-- **Solo-safe** — multiplayer-gated behavior; solo is vanilla (two narrow, documented exceptions).
-- **Evidence discipline** — a fix is only called *field validated* after a post-fix two-sided
+- **Solo-safe:** multiplayer-gated behavior; solo is vanilla except for two documented cases.
+- **Validation policy:** a fix is only called *field validated* after a post-fix two-sided
   capture; statuses in the catalog use a strict vocabulary.
 
-## Reproduction & verification
+## Reproduction and verification
 
 `REPRODUCING.md` has per-issue procedures (including the charge/parry same-tile scenario and the
 diagnostic log contracts). `TESTING.md` describes current verification and the automated-test plan.
-`BUILDING.md` is a clean-room build guide against Unity `6000.0.64f1` and the hashed reference
+`BUILDING.md` is a build guide for Unity `6000.0.64f1` and the hashed reference
 assemblies.
 
-## What comes next (not in this build)
+## Planned work
 
-`ROADMAP-0.9.md` — a frozen five-part hardening series (session-latched peer compatibility, P2P wire
-framing, transfer ACK/NACK, barrier retry/abort, inference conservatism). No new gameplay fixes ride
-in that series.
+`ROADMAP-0.9.md` defines five hardening changes: session-latched peer compatibility, P2P wire
+framing, transfer ACK/NACK, barrier retry/abort, and conservative inference. The series contains no
+new gameplay fixes.
 
 ## Contact
 
-Author: **Sternab** (mod author / field-test lead). Repository commits and package checksums in
-`RELEASE-0.8.32.md` are the canonical identity for any question about "which build."
+Author: **Sternab**. Repository commits and package checksums in
+`RELEASE-0.8.32.md` identify the reviewed source and release artifact.

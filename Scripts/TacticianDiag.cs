@@ -1,14 +1,12 @@
-// Tactician momentum DIAGNOSTIC -- log-only: TacticalAdvantagePassive accumulates
+// Tactician momentum diagnostic. TacticalAdvantagePassive accumulates
 // a fractional remainder in data.MomentumThisCombat (+= evt.ResultDeltaValue * multiplier; -= 100 per
-// crossing) and adds TacticianTacticalAdvantageBuff on each 100-crossing -- but Data.GetHash128 OMITS the
+// crossing) and adds TacticianTacticalAdvantageBuff on each 100-crossing, but Data.GetHash128 omits the
 // accumulator entirely, so a remainder divergence is invisible to desync detection until one peer crosses
 // 100 first and mints a one-sided hashed buff (captured @7816039: one peer alone created the buff).
-// WHAT ORIGINALLY SPLIT THE REMAINDERS IS UNPROVEN -- possibly an upstream event-delta difference, possibly
-// an amplified earlier fork (the charge class fired nearby) -- so per instrument-before-fix this logs every
-// momentum event with its delta and post-event remainder; the two-sided diff shows WHERE the remainders
-// first part and by how much. Same base-only-hash mistake exists in MomentumReachedTrigger, HunterDodge,
-// ChangeVeilDamage (bounded hash audit queued separately). NOT a fix; do not change gameplay or hashing yet.
-// Log-only -> subset-safe; MP-gated. The Data object is read reflectively (component runtime data).
+// The initial remainder difference is not yet identified. This component logs each momentum event, delta,
+// and post-event remainder so paired logs can locate the first difference. MomentumReachedTrigger,
+// HunterDodge, and ChangeVeilDamage have the same base-only hash pattern and remain audit items.
+// This component is log-only, subset-safe, and multiplayer-gated. Runtime data is read reflectively.
 using System;
 using System.Reflection;
 using HarmonyLib;
