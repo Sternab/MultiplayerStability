@@ -2,16 +2,14 @@
 // shorter than two seconds are silent, and the warning dialog fires once per session through the
 // WasDesync latch. This component adds attribution without initiating a resync:
 //   1. injects a logging IDesyncHandler into both handler lists of the live detection strategy;
-//   2. records (tick, localHash) each tick and, on mismatch, logs every peer's reported hash plus the
-//      inferred tick%5 state bucket (player/sceneEntities/areaPersistent/randomState/syncData+signals);
+//   2. records (tick, localHash) each tick and, on mismatch, logs every peer's reported hash plus a
+//      clearly-labelled tick%5 bucket heuristic. SynchronizedData carries no sender tick, and a 32-bit
+//      hash may match several local ticks, so this attribution never drives player-facing policy;
 //   3. traces which serializable RNG streams advanced each sim tick, so randomState desyncs identify the
 //      affected stream (e.g. Weather advancing per frame);
 //   4. re-arms the once-per-session latch when an episode recovers (~5s of matching hashes), so later
 //      desyncs still notify. While continuously diverged nothing re-fires, so no dialog spam;
-//   5. suppresses the vanilla resync DIALOG (UIDesyncHandler.ShowMessageBox, via a prefix) for confirmed
-//      randomState-only desyncs that fire during a loading/cutscene/fade transition (frame-timing flaps that
-//      self-heal) -- still logged in full; the dialog is re-shown if the episode graduates to another state
-//      bucket or persists past the transition.
+//   5. marks transition-adjacent reports in the log. The vanilla UIDesyncHandler always remains active.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -28,6 +26,7 @@ using Kingmaker.Networking.Desync;
 using Kingmaker.Networking.Hash;
 using Kingmaker.Utility.Random;
 using Kingmaker.Utility.StatefulRandom;
+using StateHasher.Core;
 using StateHasher.Core.Hashers;
 using UnityEngine;
 
@@ -50,6 +49,7 @@ namespace MultiplayerStability
         private static readonly string[] s_rngRingStreams = new string[RngRingSize];
         private static int s_rngRingCount;
         private static RandState[] s_prevStates;
+        private static int s_lastObservedTick = int.MinValue;
 
         // Entity/fact-creation attribution: every GlobalUuid draw comes from minting an entity or fact
         // UniqueId. When GlobalUuid is the diverged stream (different creation COUNT between clients), this
@@ -61,78 +61,98 @@ namespace MultiplayerStability
         private static int s_uuidRingCount;
 
         private static BaseDesyncDetectionStrategy s_strategy;
-        private static bool s_wireAttempted;
+        private static BaseDesyncDetectionStrategy s_wiredStrategy;
+        private static DateTime s_nextWireAttemptUtc;
         private static bool s_hadDesync;
+        private static bool s_rearmReflectionErrorLogged;
         // Plain negative sentinel: MinValue sentinels overflowed the rate-limit subtraction TWICE (at int
         // width in 0.4.x and again at long width after a refactor), silencing every mismatch log.
         private static long s_lastMismatchLogTick = -1000000;
 
-        // Transition-flap policy (v0.7.6): randomState-only desyncs during loading/cutscene/fade are transient
-        // frame-timing skews (Cutscene/LoadingScreen/Weather/UnitRandom/Customization/GlobalUuid/Animation
-        // streams reconverging) -- they self-heal and are not gameplay forks. We still LOG them, but hold the
-        // player-facing "resync" prompt unless the episode GRADUATES to a non-randomState bucket or PERSISTS
-        // past the transition. NOTE: randomState alone is NOT safe to downgrade (RuleSystem lives there -- the
-        // burst fork was randomState in active combat); the transition window is the load-bearing qualifier.
+        // Transition proximity is diagnostic context only. It must not suppress a dialog: RuleSystem lives
+        // in randomState, and SynchronizedData does not identify the sender tick needed to attribute a
+        // reported 32-bit hash safely.
         private const int TransitionGraceTicks = 100;   // ~5s: "during or just-after" loading/cutscene/fade
-        private const int PersistTicks = 200;           // ~10s diverged past the flap -> escalate (not transient)
         private static long s_lastTransitionTick = -1000000;
-        private static bool s_episodeSawRandomState;     // POSITIVELY confirmed randomState this episode (gate:
-                                                          // require this, not mere absence of a contrary bucket)
-        private static bool s_episodeSawNonRandomState;
-        private static bool s_episodeBoxSuppressed;       // we held vanilla's desync dialog as a transition flap
-        private static bool s_episodeEscalated;
-        private static long s_episodeStartTick;
-        private static string s_lastBucketName;
 
         internal static void Wire()
         {
-            if (s_wireAttempted)
+            if (s_strategy == null && DateTime.UtcNow < s_nextWireAttemptUtc)
                 return;
-            s_wireAttempted = true;
             try
             {
                 var sync = PhotonManager.Sync;
-                s_strategy = AccessTools.Field(typeof(SyncNetManager), "m_DesyncDetectionStrategy")
+                var live = AccessTools.Field(typeof(SyncNetManager), "m_DesyncDetectionStrategy")
                     ?.GetValue(sync) as BaseDesyncDetectionStrategy;
-                if (s_strategy == null)
+                if (live == null)
                 {
-                    MultiplayerStabilityMain.Log("[DesyncWatch][ERR] detection strategy not found; diagnosis inactive.");
+                    s_strategy = null;
+                    s_nextWireAttemptUtc = DateTime.UtcNow.AddSeconds(5);
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DesyncWatch][WARN] detection strategy unavailable; retrying in five seconds.");
                     return;
                 }
-                InjectHandler("m_PotentialDesyncHandler", "potential");
-                InjectHandler("m_SeriousDesyncHandler", "serious");
-                MultiplayerStabilityMain.Log("[DesyncWatch] Logging handlers injected into " + s_strategy.GetType().Name + ".");
+                s_strategy = live;
+                if (ReferenceEquals(live, s_wiredStrategy))
+                    return;
+
+                InjectHandler(live, "m_PotentialDesyncHandler", "potential");
+                InjectHandler(live, "m_SeriousDesyncHandler", "serious");
+                s_wiredStrategy = live;
+                s_nextWireAttemptUtc = DateTime.MinValue;
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DesyncWatch] Logging handlers injected into " + live.GetType().Name + ".");
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[DesyncWatch][ERR] wire failed: " + e);
+                s_strategy = null;
+                s_nextWireAttemptUtc = DateTime.UtcNow.AddSeconds(5);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DesyncWatch][ERR] wire failed; retrying in five seconds: " + e);
             }
         }
 
-        private static void InjectHandler(string fieldName, string kind)
+        private static void InjectHandler(
+            BaseDesyncDetectionStrategy strategy,
+            string fieldName,
+            string kind)
         {
-            var field = AccessTools.Field(s_strategy.GetType(), fieldName);
-            var existing = field?.GetValue(s_strategy) as IDesyncHandler;
+            var field = AccessTools.Field(strategy.GetType(), fieldName);
+            if (field == null)
+                throw new MissingFieldException(strategy.GetType().FullName, fieldName);
+
+            var existing = field.GetValue(strategy) as IDesyncHandler;
             var ours = new LoggingDesyncHandler(kind);
             // The vanilla handlers are CompositeDesyncHandlers over a mutable list -- append when possible,
             // otherwise wrap whatever is there in a new composite.
             var collectors = (existing is CompositeDesyncHandler)
-                ? AccessTools.Field(typeof(CompositeDesyncHandler), "m_Collectors").GetValue(existing) as List<IDesyncHandler>
+                ? AccessTools.Field(typeof(CompositeDesyncHandler), "m_Collectors")
+                    ?.GetValue(existing) as List<IDesyncHandler>
                 : null;
             if (collectors != null)
             {
+                for (int i = 0; i < collectors.Count; i++)
+                {
+                    if (collectors[i] is LoggingDesyncHandler logging && logging.m_Kind == kind)
+                        return;
+                }
                 collectors.Add(ours);
                 return;
             }
+            if (existing is LoggingDesyncHandler direct && direct.m_Kind == kind)
+                return;
+
             var list = new List<IDesyncHandler>();
             if (existing != null)
                 list.Add(existing);
             list.Add(ours);
-            field?.SetValue(s_strategy, new CompositeDesyncHandler(list));
+            field.SetValue(strategy, new CompositeDesyncHandler(list));
         }
 
-        // Hash every scene entity individually and log (identity, hash). Two clients' logs diff to the exact
-        // entity whose hashed state diverged -- the sceneEntities-bucket counterpart to the RNG fingerprints.
+        // Hash every scene entity as a standalone root. RecursiveReferences is reset around each entity so
+        // an earlier traversal cannot change a later result. Full 128-bit hashes and sorted identities make
+        // two peers' output mechanically diffable. These are decomposition fingerprints, not a promise that
+        // concatenating them reproduces the engine's aggregate scene hash.
         private static void DumpSceneEntityHashes(HashableState data)
         {
             try
@@ -141,62 +161,60 @@ namespace MultiplayerStability
                 var entities = scene?.AllEntityData;
                 if (entities == null)
                     return;
-                var sb = new StringBuilder("[DesyncWatch] scene entity hashes (diff vs peer to name the diverged entity):");
-                int n = 0;
+                var lines = new List<string>(entities.Count);
                 foreach (var e in entities)
                 {
                     if (e == null)
                         continue;
-                    if (n >= 500)
+                    try
                     {
-                        sb.Append("\n  ...(truncated at 500 of ").Append(entities.Count).Append(')');
-                        break;
+                        RecursiveReferences.Reset();
+                        Hash128 hash = ClassHasher<Entity>.GetHash128(e);
+                        // Entity.ToString() reads View.GO.name, which is client-local and makes an otherwise
+                        // useful cross-peer diff noisy. Type plus synchronized UniqueId is the stable key.
+                        string id = e.GetType().Name + "#" + (e.UniqueId ?? "?");
+                        lines.Add(id + " = " + hash);
                     }
-                    Hash128 h = ClassHasher<Entity>.GetHash128(e);
-                    string id = e.ToString();
-                    if (id != null && id.Length > 90)
-                        id = id.Substring(0, 90);
-                    sb.Append("\n  ").Append(id).Append(" = ").Append(((uint)h.GetHashCode()).ToString("X8"));
-                    n++;
+                    finally
+                    {
+                        RecursiveReferences.Reset();
+                    }
                 }
-                MultiplayerStabilityMain.Log(sb.ToString());
+                lines.Sort(StringComparer.Ordinal);
+                const int LinesPerChunk = 200;
+                for (int start = 0; start < lines.Count; start += LinesPerChunk)
+                {
+                    int end = Math.Min(start + LinesPerChunk, lines.Count);
+                    var sb = new StringBuilder(
+                        "[DesyncWatch] standalone scene entity hashes ")
+                        .Append(start + 1).Append('-').Append(end).Append('/').Append(lines.Count)
+                        .Append(':');
+                    for (int i = start; i < end; i++)
+                        sb.Append("\n  ").Append(lines[i]);
+                    MultiplayerStabilityMain.LogNoThrow(sb.ToString());
+                }
             }
             catch (Exception ex)
             {
-                MultiplayerStabilityMain.Log("[DesyncWatch][ERR] scene entity hash dump: " + ex.Message);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DesyncWatch][ERR] scene entity hash dump: " + ex.Message);
             }
         }
 
         private sealed class LoggingDesyncHandler : IDesyncHandler
         {
-            private readonly string m_Kind;
+            internal readonly string m_Kind;
             public LoggingDesyncHandler(string kind) { m_Kind = kind; }
 
             public void RaiseDesync(HashableState data, DesyncMeta meta)
             {
                 try
                 {
-                    // The vanilla POTENTIAL handler list is empty, so our injected logger is the only thing in
-                    // it -- and ReportState fires POTENTIAL exactly ONCE at the true start of a divergence
-                    // stretch (~41 ticks before serious). That is the correct point to reset the per-episode
-                    // flags: they then accumulate cleanly through potential->serious, and nothing wipes the
-                    // suppress flag on the serious tick. (HasDesync only turns true AT the serious threshold,
-                    // so a HasDesync-rising-edge reset fired on the serious tick and cleared the just-set
-                    // suppress flag, breaking escalation.)
-                    if (m_Kind != "serious")
-                        ResetEpisodeFlags();
-
-                    // The ACTUAL player-facing dialog is vanilla UIDesyncHandler.ShowMessageBox; it runs earlier
-                    // in the same composite dispatch and its prefix (below) already decided whether to suppress
-                    // it as a transition flap, recording s_episodeBoxSuppressed. Our log wording just mirrors
-                    // that decision -- we never controlled the prompt from here (a v0.7.6 mistake caught in review).
-                    bool flap = m_Kind == "serious" && s_episodeBoxSuppressed;
-
-                    string header = flap
-                        ? "TRANSITION DESYNC FLAP (confirmed randomState-only during loading/cutscene; expected to self-heal)"
-                        : m_Kind.ToUpper() + " DESYNC detected";
-                    MultiplayerStabilityMain.Log("[DesyncWatch] ===== " + header + " @tick "
-                        + meta.Tick + " room=" + meta.RoomId + " players=" + meta.PlayersCount + " =====");
+                    bool transitionAdjacent = InTransitionWindow();
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DesyncWatch] ===== " + m_Kind.ToUpper() + " DESYNC detected @tick "
+                        + meta.Tick + " room=" + meta.RoomId + " players=" + meta.PlayersCount
+                        + " transitionAdjacent=" + transitionAdjacent + " =====");
                     DumpRngRing(meta.Tick);
                     // Per-entity state fingerprints for sceneEntities-bucket desyncs (the RNG ring covers
                     // randomState). We are called inside HandleDesync's active StateHasherContext, so the
@@ -205,19 +223,34 @@ namespace MultiplayerStability
                     if (m_Kind == "serious")
                     {
                         DumpSceneEntityHashes(data);
-                        if (flap)
-                            MultiplayerStabilityMain.Log("[DesyncWatch] Vanilla resync dialog HELD (transient transition flap)"
-                                + " -- will show it only if this persists past the transition (~10s) or hits another state bucket.");
-                        else
-                            MultiplayerStabilityMain.Log("[DesyncWatch] You can keep playing, or the host can resync everyone"
-                                + " from the co-op lobby (Launch) -- transfers are fast with this mod.");
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[DesyncWatch] Vanilla desync dialog remains authoritative; no diagnostic "
+                            + "attribution suppresses it.");
                     }
                 }
                 catch (Exception e)
                 {
-                    MultiplayerStabilityMain.Log("[DesyncWatch][ERR] handler: " + e);
+                    MultiplayerStabilityMain.LogNoThrow("[DesyncWatch][ERR] handler: " + e);
                 }
             }
+        }
+
+        internal static void ResetRuntimeState(string reason)
+        {
+            s_hashRingCount = 0;
+            s_rngRingCount = 0;
+            s_uuidRingCount = 0;
+            s_prevStates = null;
+            s_hadDesync = false;
+            s_rearmReflectionErrorLogged = false;
+            s_lastMismatchLogTick = -1000000;
+            s_lastTransitionTick = -1000000;
+            s_lastObservedTick = int.MinValue;
+            // The game can replace the strategy object across network sessions. Force the next simulation
+            // tick to resolve the live object; InjectHandler is idempotent if the instance was retained.
+            s_strategy = null;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[DesyncWatch] Runtime history reset (" + reason + ").");
         }
 
         // Once per simulation tick (prefix on SyncStateCheckerController's tick, main thread), just before
@@ -230,41 +263,47 @@ namespace MultiplayerStability
                     return;
                 if (s_strategy == null)
                     Wire();
+                int tick = Game.Instance.RealTimeController.CurrentNetworkTick;
+                if (s_lastObservedTick != int.MinValue && tick < s_lastObservedTick)
+                    ResetRuntimeState("network tick regression " + s_lastObservedTick + " -> " + tick);
+                s_lastObservedTick = tick;
                 var streams = PFStatefulRandom.Serializable;
                 if (s_prevStates == null || s_prevStates.Length != streams.Length)
                 {
                     s_prevStates = new RandState[streams.Length];
                     for (int i = 0; i < streams.Length; i++)
                         s_prevStates[i] = streams[i].State;
-                    return;
                 }
-                StringBuilder sb = null;
-                for (int i = 0; i < streams.Length; i++)
+                else
                 {
-                    var cur = streams[i].State;
-                    var prev = s_prevStates[i];
-                    if (cur.x != prev.x || cur.y != prev.y || cur.z != prev.z || cur.w != prev.w)
+                    StringBuilder sb = null;
+                    for (int i = 0; i < streams.Length; i++)
                     {
-                        if (sb == null) sb = new StringBuilder();
-                        else sb.Append(',');
-                        // Append a post-tick state fingerprint: two clients drawing the same streams on the
-                        // same tick look identical without it; the fingerprint diff pinpoints the exact tick
-                        // and stream associated with the first recorded divergence (2026-07-02 capture).
-                        sb.Append(streams[i].Name).Append(':')
-                          .Append((cur.x ^ cur.y ^ cur.z ^ cur.w).ToString("X8"));
-                        s_prevStates[i] = cur;
+                        var cur = streams[i].State;
+                        var prev = s_prevStates[i];
+                        if (cur.x != prev.x || cur.y != prev.y || cur.z != prev.z || cur.w != prev.w)
+                        {
+                            if (sb == null) sb = new StringBuilder();
+                            else sb.Append(',');
+                            sb.Append(streams[i].Name).Append(':')
+                              .Append(cur.x.ToString("X8")).Append('/')
+                              .Append(cur.y.ToString("X8")).Append('/')
+                              .Append(cur.z.ToString("X8")).Append('/')
+                              .Append(cur.w.ToString("X8"));
+                            s_prevStates[i] = cur;
+                        }
+                    }
+                    if (sb != null)
+                    {
+                        int slot = s_rngRingCount++ % RngRingSize;
+                        s_rngRingTick[slot] = tick;
+                        s_rngRingStreams[slot] = sb.ToString();
                     }
                 }
-                if (sb != null)
-                {
-                    int slot = s_rngRingCount++ % RngRingSize;
-                    s_rngRingTick[slot] = Game.Instance.RealTimeController.CurrentNetworkTick;
-                    s_rngRingStreams[slot] = sb.ToString();
-                }
-                // Remember the last tick we were in a transition (loading / fade / cutscene). InTransition-
-                // Window() then also covers the "just-after-area-load" grace, where flaps still settle.
+                // Remember the last tick we were in a transition (loading / fade / cutscene).
+                // InTransitionWindow() also covers the short settle period after an area load.
                 if (IsTransitionActive())
-                    s_lastTransitionTick = Game.Instance.RealTimeController.CurrentNetworkTick;
+                    s_lastTransitionTick = tick;
             }
             catch (Exception)
             {
@@ -301,90 +340,6 @@ namespace MultiplayerStability
             catch (Exception)
             {
                 return false;
-            }
-        }
-
-        // A transition flap = a CONFIRMED randomState-only episode occurring in/just-after a transition. The
-        // gate requires POSITIVE randomState confirmation (not mere absence of a contrary bucket):
-        // if attribution never resolved a bucket we do NOT treat it as a flap, so the dialog shows (safe).
-        // randomState alone is insufficient (RuleSystem is randomState -- the burst fork was randomState in
-        // active combat); the transition window is what makes suppression safe.
-        private static bool IsTransitionFlap()
-        {
-            return NetworkingManager.IsMultiplayer
-                && s_episodeSawRandomState
-                && !s_episodeSawNonRandomState
-                && InTransitionWindow();
-        }
-
-        // Called by the UIDesyncHandler prefix (runs in the composite BEFORE our logger). Returns true to
-        // SUPPRESS vanilla's resync dialog for a transition flap, recording that we held it + the start tick
-        // so OnMismatchReported can escalate (re-show it) if it turns out not to be transient.
-        internal static bool ShouldSuppressDesyncBox()
-        {
-            try
-            {
-                if (!NetworkingManager.IsMultiplayer)
-                    return false;
-                // The vanilla dialog fires INSIDE HandleActorsState; our OnMismatchReported postfix that
-                // records the bucket runs AFTER it. So we cannot trust s_episodeSawRandomState to reflect THIS
-                // tick yet -- re-infer the current bucket right here so the decision at the first serious
-                // prompt (the only one that matters) is self-sufficient and not a stale/cleared flag.
-                RefreshEpisodeBucketNow();
-                if (!IsTransitionFlap())
-                    return false;
-                s_episodeBoxSuppressed = true;
-                s_episodeStartTick = Game.Instance.RealTimeController.CurrentNetworkTick;
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;   // any doubt -> let the vanilla dialog show
-            }
-        }
-
-        // Clear per-episode transition-flap bookkeeping. Called from the POTENTIAL handler (once, at the true
-        // start of a divergence stretch) so the flags accumulate cleanly through potential->serious.
-        private static void ResetEpisodeFlags()
-        {
-            s_episodeSawRandomState = false;
-            s_episodeSawNonRandomState = false;
-            s_episodeBoxSuppressed = false;
-            s_episodeEscalated = false;
-        }
-
-        // Infer the CURRENT divergence bucket from live peer hashes and fold it into the episode flags -- the
-        // same flag-setting OnMismatchReported does, but on demand, because the dialog fires before that postfix.
-        private static void RefreshEpisodeBucketNow()
-        {
-            try
-            {
-                var sdc = Game.Instance.SynchronizedDataController;
-                var players = (sdc != null && sdc.SynchronizedData != null) ? sdc.SynchronizedData.Players : null;
-                if (players == null)
-                    return;
-                InferBucket(players);   // sets s_lastBucketName
-                if (s_lastBucketName == "randomState")
-                    s_episodeSawRandomState = true;
-                else if (s_lastBucketName != null)
-                    s_episodeSawNonRandomState = true;
-            }
-            catch (Exception)
-            {
-            }
-        }
-
-        // Re-show the exact vanilla desync dialog on escalation. UIDesyncHandler.RaiseDesync ignores both its
-        // args (it just shows a static message box), so re-invoking with defaults is safe and future-proof.
-        private static void ShowVanillaDesyncBox()
-        {
-            try
-            {
-                new UIDesyncHandler().RaiseDesync(default(HashableState), default(DesyncMeta));
-            }
-            catch (Exception e)
-            {
-                MultiplayerStabilityMain.Log("[DesyncWatch][ERR] re-show desync dialog: " + e.Message);
             }
         }
 
@@ -444,33 +399,8 @@ namespace MultiplayerStability
                         sb.Append('P').Append(pc.Player.Index).Append('=').Append(hash.ToString("X8")).Append(' ');
                 }
                 sb.Append("-> ").Append(InferBucket(players));
-                MultiplayerStabilityMain.Log(sb.ToString());
-
-                // Track this episode's buckets: POSITIVELY confirmed randomState (the gate to suppress), and
-                // any non-randomState bucket (which means it is NOT a pure transition flap).
-                if (s_lastBucketName == "randomState")
-                    s_episodeSawRandomState = true;
-                else if (s_lastBucketName != null)
-                    s_episodeSawNonRandomState = true;
-
-                // If we HELD vanilla's resync dialog as a transition flap, escalate once it proves it was NOT
-                // transient -- it graduated to another state bucket, or it is still diverged well past the
-                // transition (~10s). Transient flaps recover (ReArmOnRecovery) well before this and
-                // are reset, so they never reach here. On escalation we SHOW the same dialog we held, so the
-                // player still gets the real prompt (UIDesyncHandler ignores its args, so re-invoking is safe).
-                if (s_episodeBoxSuppressed && !s_episodeEscalated)
-                {
-                    bool graduated = s_episodeSawNonRandomState;
-                    bool persisted = tick - s_episodeStartTick > PersistTicks && !InTransitionWindow();
-                    if (graduated || persisted)
-                    {
-                        s_episodeEscalated = true;
-                        MultiplayerStabilityMain.Log("[DesyncWatch] Transition flap did NOT clear ("
-                            + (graduated ? "graduated to a non-randomState bucket" : "still diverged past the transition")
-                            + ") -- showing the resync dialog now.");
-                        ShowVanillaDesyncBox();
-                    }
-                }
+                sb.Append(" transitionAdjacent=").Append(InTransitionWindow());
+                MultiplayerStabilityMain.LogNoThrow(sb.ToString());
             }
             catch (Exception)
             {
@@ -479,26 +409,46 @@ namespace MultiplayerStability
 
         private static string InferBucket(List<PlayerCommands<SynchronizedData>> players)
         {
-            int n = Math.Min(s_hashRingCount, HashRingSize);
+            var reportedHashes = new HashSet<int>();
             foreach (var pc in players)
             {
                 foreach (var sd in pc.Commands)
                 {
-                    if (sd.IsEmpty)
-                        continue;
-                    for (int i = 0; i < n; i++)
-                    {
-                        if (s_hashRingHash[i] != sd.stateHash)
-                            continue;
-                        int senderTick = s_hashRingTick[i];
-                        s_lastBucketName = BucketNames[((senderTick % 5) + 5) % 5];
-                        return "bucket=" + s_lastBucketName
-                            + " (senderTick " + senderTick + ", inferred)";
-                    }
+                    if (!sd.IsEmpty)
+                        reportedHashes.Add(sd.stateHash);
                 }
             }
-            s_lastBucketName = null;   // unknown -- treat conservatively (does not count as randomState-only)
-            return "bucket=? (no local hash match)";
+
+            int n = Math.Min(s_hashRingCount, HashRingSize);
+            int first = Math.Max(0, s_hashRingCount - n);
+            int? bucket = null;
+            int matches = 0;
+            for (int i = first; i < s_hashRingCount; i++)
+            {
+                int slot = i % HashRingSize;
+                if (!reportedHashes.Contains(s_hashRingHash[slot]))
+                    continue;
+
+                int candidate = ((s_hashRingTick[slot] % BucketNames.Length) + BucketNames.Length)
+                    % BucketNames.Length;
+                matches++;
+                if (!bucket.HasValue)
+                    bucket = candidate;
+                else if (bucket.Value != candidate)
+                {
+                    return "bucket=? (ambiguous hash-only heuristic; " + matches
+                        + "+ local matches span multiple buckets)";
+                }
+            }
+
+            if (!bucket.HasValue)
+            {
+                return "bucket=? (no local hash match)";
+            }
+
+            string bucketName = BucketNames[bucket.Value];
+            return "bucket~=" + bucketName + " (hash-only heuristic; " + matches
+                + " local match" + (matches == 1 ? "" : "es") + ", sender tick unavailable)";
         }
 
         // Vanilla latches WasDesync for the whole session after the first serious desync. Once an episode
@@ -512,16 +462,44 @@ namespace MultiplayerStability
             bool has = strat.HasDesync;
             if (s_hadDesync && !has && strat.WasDesync)
             {
-                AccessTools.PropertySetter(typeof(BaseDesyncDetectionStrategy), "WasDesync")
-                    ?.Invoke(strat, new object[] { false });
-                AccessTools.Field(strat.GetType(), "m_DesyncTickFirst")?.SetValue(strat, -32768);
-                AccessTools.Field(strat.GetType(), "m_DesyncTickLast")?.SetValue(strat, -32768);
-                MultiplayerStabilityMain.Log("[DesyncWatch] Desync episode recovered (hashes matched ~5s); notifications re-armed.");
+                var setter = AccessTools.PropertySetter(
+                    typeof(BaseDesyncDetectionStrategy), "WasDesync");
+                var firstField = AccessTools.Field(strat.GetType(), "m_DesyncTickFirst");
+                var lastField = AccessTools.Field(strat.GetType(), "m_DesyncTickLast");
+                if (setter == null || firstField == null || lastField == null)
+                {
+                    if (!s_rearmReflectionErrorLogged)
+                    {
+                        s_rearmReflectionErrorLogged = true;
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[DesyncWatch][ERR] recovery latch members not found; later "
+                            + "desync notifications may remain latched.");
+                    }
+                    s_hadDesync = has;
+                    return;
+                }
+
+                try
+                {
+                    setter.Invoke(strat, new object[] { false });
+                    firstField.SetValue(strat, -32768);
+                    lastField.SetValue(strat, -32768);
+                }
+                catch (Exception e)
+                {
+                    if (!s_rearmReflectionErrorLogged)
+                    {
+                        s_rearmReflectionErrorLogged = true;
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[DesyncWatch][ERR] recovery latch reset failed; later desync "
+                            + "notifications may remain latched: " + e.Message);
+                    }
+                    s_hadDesync = has;
+                    return;
+                }
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DesyncWatch] Desync episode recovered (hashes matched ~5s); notifications re-armed.");
             }
-            // NOTE: episode-flag reset is NOT done here. HasDesync only turns true at the serious threshold
-            // (SlidingWindow: 41 < tick - m_DesyncTickFirst), so a rising-edge reset here fires on the serious
-            // tick and would wipe the suppress flag the dialog prefix just set. The reset lives in the POTENTIAL
-            // handler instead (fires once at the true divergence-stretch start, ~41 ticks earlier).
             s_hadDesync = has;
         }
 
@@ -530,7 +508,7 @@ namespace MultiplayerStability
             int n = Math.Min(s_rngRingCount, RngRingSize);
             if (n == 0)
             {
-                MultiplayerStabilityMain.Log("[DesyncWatch] rng trace: (empty)");
+                MultiplayerStabilityMain.LogNoThrow("[DesyncWatch] rng trace: (empty)");
                 return;
             }
             var sb = new StringBuilder("[DesyncWatch] rng streams advanced near tick ").Append(aroundTick).Append(':');
@@ -543,7 +521,7 @@ namespace MultiplayerStability
                 sb.Append("\n  t").Append(s_rngRingTick[slot]).Append(": ").Append(s_rngRingStreams[slot]);
                 emitted++;
             }
-            MultiplayerStabilityMain.Log(sb.ToString());
+            MultiplayerStabilityMain.LogNoThrow(sb.ToString());
             DumpUuidRing(aroundTick);
         }
 
@@ -578,7 +556,7 @@ namespace MultiplayerStability
                 sb.Append("\n  t").Append(s_uuidRingTick[slot]).Append(": ").Append(s_uuidRingWhat[slot]);
                 emitted++;
             }
-            MultiplayerStabilityMain.Log(sb.ToString());
+            MultiplayerStabilityMain.LogNoThrow(sb.ToString());
         }
     }
 
@@ -588,16 +566,6 @@ namespace MultiplayerStability
         private static System.Reflection.MethodBase TargetMethod()
             => AccessTools.Method(typeof(SyncStateCheckerController), "Kingmaker.Controllers.Interfaces.IControllerTick.Tick");
         private static void Prefix() => DesyncWatch.OnSimTick();
-    }
-
-    // The ACTUAL player-facing resync dialog. Vanilla's serious-desync handler list contains UIDesyncHandler,
-    // which shows ShowMessageBox(DesyncWasDetected) regardless of our appended logger. Skip it ONLY for a
-    // confirmed transition flap (randomState-only, in a loading/cutscene window); OnMismatchReported re-shows
-    // it if the episode escalates. Returns true (show) on anything unexpected -- never hide a real desync.
-    [HarmonyPatch(typeof(UIDesyncHandler), nameof(UIDesyncHandler.RaiseDesync))]
-    internal static class UIDesyncHandler_RaiseDesync_SuppressFlap_Patch
-    {
-        private static bool Prefix() => !DesyncWatch.ShouldSuppressDesyncBox();
     }
 
     [HarmonyPatch]
@@ -616,8 +584,18 @@ namespace MultiplayerStability
     {
         private static void Prefix(EntityFact __instance, out bool __state)
         {
-            // Only a first-time attach (empty UniqueId) actually draws GlobalUuid; re-attach/load does not.
-            __state = NetworkingManager.IsMultiplayer && string.IsNullOrEmpty(__instance.UniqueId);
+            __state = false;
+            try
+            {
+                // Only a first-time attach (empty UniqueId) actually draws GlobalUuid; re-attach/load does not.
+                __state = NetworkingManager.IsMultiplayer
+                    && __instance != null
+                    && string.IsNullOrEmpty(__instance.UniqueId);
+            }
+            catch (Exception)
+            {
+                // Diagnostic only: never make EntityFact.Attach fail.
+            }
         }
 
         private static void Postfix(EntityFact __instance, bool __state)
@@ -637,9 +615,15 @@ namespace MultiplayerStability
                 var ownerUnit = owner as AbstractUnitEntity;
                 if (ownerUnit != null)
                     who = "@" + (ownerUnit.Blueprint != null ? ownerUnit.Blueprint.name : "?")
+                        + "#" + (ownerUnit.UniqueId ?? "?")
                         + (ownerUnit.IsPreviewUnit ? "[PREVIEW]" : "");
                 else
-                    who = owner != null ? "@" + owner.GetType().Name : "";
+                {
+                    var ownerEntity = owner as Entity;
+                    who = ownerEntity != null
+                        ? "@" + ownerEntity.GetType().Name + "#" + (ownerEntity.UniqueId ?? "?")
+                        : owner != null ? "@" + owner.GetType().Name : "";
+                }
                 DesyncWatch.RecordUuidCreation((bp != null ? bp.name : "?") + who);
             }
             catch (Exception)
@@ -658,5 +642,11 @@ namespace MultiplayerStability
     internal static class SyncNetManager_HandleActorsState_Attribution_Patch
     {
         private static void Postfix() => DesyncWatch.OnMismatchReported();
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnLeave))]
+    internal static class ModsNetManager_OnLeave_DesyncWatchReset_Patch
+    {
+        private static void Postfix() => DesyncWatch.ResetRuntimeState("room leave");
     }
 }

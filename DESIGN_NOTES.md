@@ -2,224 +2,223 @@
 
 ## Scope
 
-Multiplayer Stability is a set of Harmony patches and diagnostics for Rogue Trader co-op. It works
-at mod level, so it targets specific engine seams rather than replacing the multiplayer model.
+Multiplayer Stability is a set of Harmony patches for Rogue Trader co-op. It targets specific
+engine seams that were identified through paired logs and code review. It does not replace the
+network model and does not claim to be an engine-level solution.
 
-The project does not assume that its patches are better than an engine-level solution. Owlcat has
-access to the complete source, build pipeline, telemetry, and test environment. These patches are
-useful as reproduced defects, narrow mitigations, and examples of where a local value can cross into
-lockstep state.
+Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
+project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The current source contains 23 components across 25 C# files. Harmony applies 45 patch classes
-independently at startup.
+The v0.9.0 source contains 24 components across 26 C# files.
 
 ## Working Model
 
-Rogue Trader uses a deterministic simulation with hashed state and named RNG streams. The recurring
-failure pattern in the captures reviewed for game build `1.6.1.514` is:
+Rogue Trader runs synchronized simulation state with per-tick hashes and named stateful RNG streams.
+The recurring defect pattern observed on game build `1.6.1.514` is:
 
 1. A value differs locally between peers.
-2. That value changes a simulation branch, entity field, command, fact, or RNG draw.
-3. The resulting state enters a synchronized hash.
-4. The peers report a desync later, sometimes in a different subsystem from the original cause.
+2. That value changes a simulation branch, command, field, fact, candidate set, or RNG draw.
+3. The result enters synchronized state.
+4. The game reports the mismatch later, sometimes under a different subsystem.
 
-Confirmed local inputs include:
+Confirmed local inputs include camera and fog visibility, live view objects and bones, renderer
+bounds, Unity physics order, UI preview work, frame-timed VFX, and cache contents. Exceptions can
+also fork state when they occur after a simulation write but before command bookkeeping completes.
 
-- camera and fog visibility;
-- live view objects, bones, and renderer bounds;
-- Unity physics and trigger callback order;
-- UI preview units and dialogue inspection;
-- frame-timed animation and weather work;
-- caches populated by aiming or preview calls;
-- exceptions after a simulation write but before command bookkeeping completes.
+This model explains the defects listed below. It is not a claim that every desync has one cause.
 
-This is a working explanation for the captured defects, not a claim that every Rogue Trader desync
-has the same cause.
+## Safety Envelope
 
-## Design Rules
+### Shared compatibility decision
 
-### Exact peer parity
+Lobby mod properties are local observations, not a consensus protocol. v0.9.0 therefore makes one
+host-authored decision at each save-transfer epoch:
 
-Every simulation-changing component must be installed at the same version on every peer. A
-one-sided deterministic change is still a deterministic disagreement. Version parity is manual in
-v0.8.32; a session-latched compatibility check is planned for 0.9.
+1. The uploading host reads every peer's Photon mod property.
+2. Peers report their compiled assembly MVID to the room owner.
+3. The host checks manifest version and module identity, then hashes the sorted actor roster.
+4. It sends a reliable `MPSC` decision frame before vanilla sends `LoadSave`.
+5. Downloading peers validate the sender, version, module identity, player count, and roster hash
+   before enabling
+   simulation fixes or custom protocols.
 
-### Narrow patch scope
+An incompatible decision disables those behaviors on 0.9 peers. If the host cannot queue the
+decision, it aborts the start attempt. If a client sees the mod on another peer but receives no
+valid decision, it refuses the load. This avoids entering play with different policies.
 
-Patches target the caller or condition that was linked to a capture or confirmed in engine code.
-The project avoids global RNG replacement, broad exception suppression, and command-buffer
-rewrites.
+Pre-0.9 builds do not understand the decision frame. Mixed sessions containing those builds remain
+unsupported. Exact version parity also does not prove that every Harmony class installed, so any
+startup `[ERR]` invalidates the build for multiplayer.
 
-### Solo behavior
+Diagnostics, UI-only guards, and the transfer acknowledgement pump do not depend on the simulation
+gate. Solo or unresolved sessions use vanilla simulation paths.
 
-Multiplayer behavior is normally gated so single-player follows vanilla code. Two older fixes are
-solo-safe but not byte-identical:
+### Patch isolation
 
-- weather VFX draws use a non-hashed fallback;
-- projectile aim-bone selection uses a fixed choice.
+Harmony classes are applied independently. Failure of one class does not stop unrelated classes,
+but a component spanning several classes can be left partly active. Runtime behavior is local to
+each patch:
 
-### No automatic resync
+- most prevention patches return to vanilla before mutation when their guard or reflection fails;
+- diagnostics are designed not to throw into gameplay;
+- the compatibility gate fails closed when a shared policy cannot be established;
+- the trap containment separates known null state, reflection drift, logging failure, and real
+  target exceptions instead of handling them through one broad catch.
 
-The mod can suppress the popup for a confirmed short transition flap, but it does not start a
-resync. A persistent or broader mismatch restores the normal warning.
+### Player control
 
-### Local failure handling
-
-Patch classes are applied independently. A class that fails to resolve logs `[Init][ERR]` and does
-not prevent unrelated classes from loading. Runtime guards generally return to the vanilla path at
-their own call site.
-
-This is best-effort isolation, not atomic component activation. A component that spans several
-patch classes can be partly active if only one class fails. Startup errors therefore make the whole
-build unsuitable for multiplayer until reviewed.
+The mod never starts a resync automatically. DesyncWatch records transition context but does not
+suppress or replace the game's desync dialog.
 
 ### Evidence labels
 
-- **Field validated:** a post-fix paired capture exercised the original scenario without the
-  previous divergence.
-- **Mechanism confirmed:** logs or source establish the defect and intervention, but a dedicated
-  post-fix capture is still missing.
-- **Diagnostic:** records evidence and intentionally does not change simulation behavior.
-- **Infrastructure:** transfer, loading, or reporting behavior rather than a desync prevention
-  patch.
+- **Field evidence:** paired post-fix logs exercised the relevant path without the previous fork.
+- **Mechanism confirmed:** code and captures identify the path, but a dedicated post-fix session is
+  still required.
+- **Diagnostic:** records evidence and intentionally does not change simulation.
+- **Infrastructure:** changes transfer, loading, compatibility, or reporting behavior.
 
-## Component Summary
+## Components
 
-| ID | Component | Source | Purpose | Status |
+| ID | Component | Source | Purpose | Evidence |
 |---|---|---|---|---|
-| C01 | Transfer booster | `TransferBooster.cs` | Pumps transfer acknowledgements and adapts the vanilla transfer window. | Infrastructure, measured |
-| C02 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves save bytes through Steam Networking Messages with Photon control and fallback. | Infrastructure, measured |
-| C03 | Desync watch | `DesyncWatch.cs` | Records episodes, state buckets, RNG fingerprints, entities, and transition-flap policy. | Diagnostic; flap policy field validated |
-| C04 | Weather RNG | `WeatherRngFix.cs` | Keeps render-loop weather VFX draws out of the hashed Weather stream. | Field validated |
-| C05 | Projectile RNG | `ProjectileRngFix.cs` | Removes view-dependent aim-bone draws from the hashed Projectiles stream. | Field validated |
-| C06 | Sequenced locks | `SequencedLocks.cs` | Adds sequence identity to selected loading barriers. | Field validated |
-| C07 | Deterministic sleep | `DeterministicSleep.cs` | Replaces camera-driven awake census decisions with synchronized policies. | Field validated |
-| C08 | Fog gates | `FogGateFix.cs` | Removes local fog and render visibility from six mechanics decisions. | Partly field validated |
-| C09 | Dash delivery | `DashDeliveryFix.cs` | Stops live view position from choosing dash delivery timing. | Mechanism confirmed |
-| C10 | Preview ghosts | `PreviewGhostFix.cs` | Isolates preview entities from facts, aura candidates, item copies, and hashed UUID creation. | Mostly field validated |
-| C11 | RNG leak detector | `LeakDetector.cs` | Reports hashed RNG draws outside simulation ticks. | Diagnostic, field validated |
-| C12 | Preview rulebook guard | `PreviewRulebookGuard.cs` | Prevents preview subscribers from entering the global gameplay event bus. | Field validated |
-| C13 | Local time scale | `LocalTimeScaleFix.cs` | Removes local visibility and pause-bind writes from hashed game time. | Mechanism confirmed |
-| C14 | Deterministic order | `DeterministicOrderFix.cs` | Sorts physics range-query results before downstream random selection. | Mechanism confirmed |
-| C15 | Projectile position | `ProjectilePositionFix.cs` | Uses entity geometry instead of local view bones for projectile mechanics. | Mechanism confirmed |
-| C16 | Dialogue RNG | `DialogRngFix.cs` | Keeps UI inspection of answers and cues from advancing hashed dialogue RNG. | Field validated |
-| C17 | Idle animation RNG | `IdleAnimationRngFix.cs` | Routes idle variety through the engine's non-hashed idle stream. | Field validated |
-| C18 | Action-bar event guard | `ActionBarRoleSpamFix.cs` | Skips invalid unitless UI refreshes during player join and leave callbacks. | Field validated |
-| C19 | Weather combat-exit diagnostic | `WeatherCombatExitDiag.cs` | Records predicates and Weather draws around combat-exit inclemency changes. | Diagnostic |
-| C20 | Trap pause diagnostic and containment | `TrapPauseDiag.cs` | Records paused rotation calls and prevents a known null IK reset from aborting command processing. | Mechanism confirmed |
-| C21 | Augmentation bark guard | `AugmentationBarkFix.cs` | Stops a client-only augmentation bark from writing hashed played-banter state. | Mechanism confirmed |
-| C22 | Charge path fix | `ChargePathDiag.cs` | Disables target-blind partial charge-path cache reuse while retaining exact cache hits. | Mechanism confirmed |
-| C23 | Tactician diagnostic | `TacticianDiag.cs` | Records momentum deltas and the hash-omitted Tactician remainder. | Diagnostic |
+| C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Distributes one host decision for exact-build simulation and protocol activation. | Source reviewed and compiled; field pending |
+| C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements and uses a larger window only after compatibility approval. | Prior transfer captures; v0.9 gate pending |
+| C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer Photon fallback. | Prior path measured; v0.9 wire pending |
+| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, and transition context. | Diagnostic used in paired captures |
+| C05 | Weather RNG | `WeatherRngFix.cs` | Keeps render-loop VFX draws out of the hashed Weather stream. | Field evidence |
+| C06 | Projectile RNG | `ProjectileRngFix.cs` | Removes view-dependent aim-bone draws from the hashed Projectiles stream. | Field evidence |
+| C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, and abort behavior to selected loading barriers. | Prior sequencing evidence; v0.9 retry pending |
+| C08 | Deterministic sleep | `DeterministicSleep.cs` | Replaces local camera census decisions for combat-relevant units and stabilizes corpse state. | Field and performance evidence |
+| C09 | Fog gates | `FogGateFix.cs` | Removes local fog or render visibility terms from six mechanics call sites. | Partial field evidence |
+| C10 | Dash delivery | `DashDeliveryFix.cs` | Defers target delivery until the synchronized charge endpoint is established. | Mechanism confirmed |
+| C11 | Preview ghosts | `PreviewGhostFix.cs` | Isolates preview entities from facts, auras, item-copy UUID draws, and gameplay state. | Multiple field captures |
+| C12 | RNG leak detector | `LeakDetector.cs` | Reports hashed RNG draws outside simulation ticks, capped per stream and call site. | Diagnostic used in captures |
+| C13 | Preview rulebook guard | `PreviewRulebookGuard.cs` | Blocks preview owners from the global gameplay event bus. | Field evidence |
+| C14 | Local time scale | `LocalTimeScaleFix.cs` | Removes local visibility and pause-bind writes from hashed game time. | Mechanism confirmed |
+| C15 | Deterministic order | `DeterministicOrderFix.cs` | Sorts equal-membership range results before downstream selection. | Mechanism confirmed |
+| C16 | Projectile position | `ProjectilePositionFix.cs` | Uses entity geometry instead of local view bones for projectile mechanics. | Mechanism confirmed; limited field coverage |
+| C17 | Dialogue RNG | `DialogRngFix.cs` | Prevents UI inspection from advancing hashed dialogue RNG. | Field evidence |
+| C18 | Idle animation RNG | `IdleAnimationRngFix.cs` | Routes idle variety through the engine's non-hashed idle stream. | Field evidence |
+| C19 | Action-bar guard | `ActionBarRoleSpamFix.cs` | Skips invalid unitless UI refreshes during join and leave callbacks. | Field evidence |
+| C20 | Weather combat-exit diagnostic | `WeatherCombatExitDiag.cs` | Records the predicates and Weather draws around combat-exit inclemency. | Diagnostic |
+| C21 | Trap diagnostic and containment | `TrapPauseDiag.cs` | Records paused rotation calls and contains the confirmed null IK reset. | Mechanism confirmed; post-fix field pending |
+| C22 | Augmentation bark guard | `AugmentationBarkFix.cs` | Stops a client-only bark from writing hashed played-banter state. | Mechanism confirmed |
+| C23 | Charge path fix | `ChargePathDiag.cs` | Disables target-blind partial charge cache reuse while retaining exact hits. | Source confirmed; Dark Heresy corroboration; field pending |
+| C24 | Tactician diagnostic | `TacticianDiag.cs` | Records momentum deltas and the hash-omitted Tactician remainder without creating component data. | Diagnostic |
 
-Each source header contains the exact Harmony target, engine behavior, intervention, gate, and
-failure path. The table is an index, not a replacement for the code.
+Each source header documents its Harmony target, reason for patching, activation gate, and failure
+behavior. The table is an index, not a substitute for the implementation.
 
-## Transfer Architecture
+## Network Changes
 
-Photon remains the authoritative control path. When every peer advertises support, the host sends
-bulk save data through Steam Networking Messages:
+### Compatibility frame
 
-1. peers negotiate the side channel over Photon;
-2. save bytes are sent sequentially to each target peer;
-3. Steam may use a direct route, ICE, or Steam Datagram Relay;
-4. Photon remains available as fallback;
-5. the received byte array is passed back to the game's normal save consumer.
+Build reports use Photon code 100 with `MPSH` magic, a protocol version, manifest version, and
+assembly MVID. The compatibility decision uses the same code with `MPSC` magic plus the host's
+decision, version, module identity, player count, and roster hash. Payloads without either magic pass
+through to other handlers.
 
-The measured improvement in current captures is about 8x over the vanilla Photon bulk path.
+### Steam save transport
 
-Known hardening gaps:
+Photon remains the control path. Only the packed save byte array can use Steam Networking Messages.
+The v0.9 protocol includes:
 
-- control event code 100 has no protocol magic, version, transfer ID, or checksum;
-- completion can be acknowledged before the game accepts the byte array;
-- fallback is not tracked per peer after partial multi-peer success.
+- `MPST` magic and protocol version;
+- transfer IDs on control and data frames;
+- a 512 MiB receiver bound;
+- exact ordered offsets and declared length;
+- SHA-256 validation;
+- completion only after the current `SaveNetManager` download task accepts the bytes;
+- NACK, cancellation, idle timeout, and per-peer Photon fallback.
 
-These are 0.9 work items. They are not claims that the current transfer path caused a captured
-simulation desync.
+Steam may use a direct route or Steam Datagram Relay. The mod does not assume that a direct IP
+connection is exposed. Prior captures measured roughly 8x faster transfer than the vanilla bulk
+path, but route, save size, and connection quality affect the result.
 
-## Behavioral Differences
+If the receiver accepts the bytes but all completion frames are lost, the host can resend the save
+through Photon. This is redundant work, not acceptance of unchecked bytes.
 
-The following differences are deliberate:
+### Sequenced loading barriers
 
-- hidden AI turns run at 1x in co-op;
-- ambient scene loops farther than 25 metres from the party can sleep until approached;
-- projectiles use the target entity's base point for mechanical geometry;
-- the augmentation screen does not play its random bark in co-op;
-- a dialogue cue shown during UI inspection can differ from the synchronized cue chosen when the
-  dialogue advances;
-- confirmed short transition-only RNG flaps do not show the desync dialog unless they persist or
-  spread to another state bucket.
+The mod extends selected code-8 lock frames with magic, protocol version, lock point, and sequence.
+Reach messages retry once per second. A 30-second timeout sends an abort and returns that client to
+the vanilla barrier path. This prevents a permanent local wait, but it is not a distributed
+consensus protocol and still depends on Photon's reliable event path.
+
+## Deliberate Behavior Changes
+
+- Hidden AI turns run at 1x in multiplayer.
+- Combat-capable units use a synchronized sleep policy; distant ambient units retain the current
+  vanilla camera policy.
+- Finally-dead units use `IsDeathRevealed = true` in multiplayer.
+- Projectile mechanics use entity-derived target geometry instead of live view bones.
+- The augmentation screen does not play its client-random bark in multiplayer.
+- UI dialogue inspection can show a local preview result, but only synchronized advancement uses
+  the hashed dialogue stream.
 
 ## Open Work
 
-### Instrumented but not fixed
+### Instrumented, not fixed
 
-- Weather combat exit: a visual profile override can gate hashed Weather draws and player fields.
-  The differing predicate has not been isolated.
-- Tactician remainder: `MomentumThisCombat` is omitted from its component hash. The first source of
-  the remainder split remains unknown.
+- Combat-exit weather selection can gate hashed Weather draws on a visual profile override.
+- `MomentumThisCombat` is omitted from the Tactician component hash. The first source of its
+  remainder split is not yet proven.
 
-### Additional investigations
+### Structural limits
 
-- area-effect candidate sets populated by local Unity trigger callbacks;
-- a single-entity Eogann fork with matching recorded streams and creation history;
-- `UnitFollowUnitController.ShouldAct` reading local movement-view state before scheduling commands;
-- dodge and special-attack animation variant picks that share the idle animation RNG property.
+- Unity physics and trigger callbacks can produce different candidate membership. Sorting only
+  repairs order when membership already matches.
+- Dash delivery no longer reads live view position, but movement-agent completion can still choose
+  a different tick.
+- The deterministic sleep ambient branch intentionally retains local camera behavior for units that
+  cannot currently join combat.
+- Projectile base geometry is conservative and starship behavior has limited field coverage.
+- `Rand.Get` and the private global rulebook subscribe overload are small JIT targets. They are patched
+  during initialization, but runtime evidence is still required after engine or runtime changes.
+- Patch target names, reflected fields, and replicated current-build predicates require review
+  after every game update.
 
-### Post-fix validation still required
+## Dark Heresy Comparison
 
-- charge, attack, and parry with the attacker and target ending on the same tile;
-- trap detection under repeated auto-pause;
-- augmentation-screen bark containment;
-- preview item copy scope;
-- newer fog-gate call sites;
-- dash delivery, time scale, physics ordering, and projectile geometry.
+The supplied Dark Heresy beta decompile was used as a comparison, not as proof of Rogue Trader
+intent or final Dark Heresy behavior.
 
-## Planned 0.9 Hardening
+| Area | Dark Heresy observation | Relevance |
+|---|---|---|
+| Charge path cache | The target-blind partial cache path is absent; exact hits include destination and target identity. | Strong independent support for C23 |
+| Sleeping units | Timer aging is more explicit and includes tick-based wake state, but camera and fog still affect sleep and corpse reveal state. | Useful lifecycle design, not a deterministic census fix |
+| Loading locks | The one-byte lock implementation is materially unchanged. | Supports the same seam; no upstream resolution observed |
+| Projectile aim | View-gated `ParticlesSnapMap` selection and hashed projectile RNG remain. | The core C06 risk is still present in the beta snapshot |
+| Dash delivery | Delivery still reads `movementAgent.IsReallyMoving`. | The local completion-tick risk remains |
+| Range ordering | `FindUnitsInRange` remains unsorted while the shape-query sibling sorts. | Supports C15 but does not solve membership differences |
+| Fog mechanics | Local fog reads remain in combat join, awareness, and area-effect paths. | No broad replacement for C09 was found |
+| Tactician | The old component is marked obsolete and its momentum rule handler is removed. | Subsystem retirement, not a portable Rogue Trader patch |
 
-The planned 0.9 series changes the operational envelope rather than adding more gameplay patches:
-
-1. session-latched exact-version compatibility and component status reporting;
-2. framed and validated Steam transfer messages with parser tests;
-3. delivery ACK/NACK tied to game acceptance and per-peer fallback state;
-4. retry, timeout, and abort behavior for sequenced loading barriers;
-5. tick-checked desync attribution, per-call-site leak accounting, and a guarded reflection audit.
-
-New gameplay fixes should remain evidence-driven and separate from this hardening series.
-
-## Source Layout
-
-The repository root contains documentation and license files. Unity source is isolated under:
-
-`Assets/Modifications/MultiplayerStability`
-
-Only files imported by Unity carry `.meta` files. Root documentation does not need Unity metadata.
-The build-generated `Generated` folder is ignored.
-
-The important entry points are:
-
-- `Scripts/MultiplayerStabilityMain.cs`: Harmony initialization and patch-class isolation;
-- `Scripts/DesyncWatch.cs`: state attribution and player warning policy;
-- `Scripts/SteamP2P.cs` and `Scripts/SteamSaveTransfer.cs`: save-transfer side channel;
-- individual component files: patch targets and local rationale.
+The comparison gives direct corroboration for the charge cache change and several maintenance
+clues. It does not support a claim that the sequel broadly fixed lockstep desynchronization.
 
 ## Testing and Maintenance
 
-For multiplayer captures:
+v0.9.0 has been compiled against the Rogue Trader `1.6.1.514` reference set. The aggregate review
+build still requires a two-sided multiplayer session.
 
-1. collect `GameLogFull.txt` from every peer;
-2. identify the first mismatch tick on each machine;
-3. compare state buckets, RNG fingerprints, entity hashes, and component diagnostics;
-4. distinguish the first divergent write from later hash fallout;
-5. only mark a fix field validated after the original scenario is exercised again.
+For field captures:
 
-After every Rogue Trader update:
+1. Confirm clean startup and `[Compat] Compatible` on every peer.
+2. Collect `GameLogFull.txt` from every machine.
+3. Identify the first mismatch tick rather than the largest later dump.
+4. Compare bucket attribution, full RNG state, entity hashes, and component diagnostics.
+5. Mark a fix field-tested only after the original scenario is exercised again.
 
-1. rebuild against the updated Owlcat template and reference assemblies;
-2. review every Harmony target and reflective member lookup;
-3. compare the deterministic sleep replacement with the updated vanilla census;
-4. run a multiplayer startup check on every peer;
-5. repeat high-risk scenarios before publishing compatibility.
+After a game update:
 
-Historical paired logs and detailed capture notes are retained outside this repository because they
-can contain account identifiers and routinely exceed normal source-repository size. Redacted
-evidence can be provided for technical review.
+1. extract the modification template shipped with that game build and refresh the editor reference
+   assemblies before rebuilding;
+2. review every Harmony target and reflected member;
+3. compare the sleep replacement with the current engine method;
+4. run startup and save-transfer tests on every peer;
+5. repeat charge, trap, dialogue, weather, projectile, and dense-area performance scenarios.
+
+Raw captures and decompiled game code are intentionally excluded from the repository. Logs can
+contain account identifiers and are often hundreds of megabytes.

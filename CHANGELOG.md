@@ -3,6 +3,32 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.0 (review build)
+
+- Added peer build reports and a host-authored compatibility decision at each save-transfer epoch.
+  Matching manifest versions and compiled module IDs enable simulation fixes and custom protocols
+  together; incompatible 0.9 peers use vanilla behavior.
+- Added framed compatibility messages with sender, module, version, and roster validation. A failed
+  host send or a missing decision from a peer that advertises the mod stops the load instead of
+  entering play with different policies.
+- Added transfer magic, protocol version, transfer IDs, ordered-offset checks, a 512 MiB bound,
+  SHA-256 validation, receiver acceptance ACK/NACK, cancellation, idle timeout, and per-peer Photon
+  fallback.
+- Added sequence identity, retransmission, timeout, and abort behavior to selected loading locks.
+- Removed transition-flap dialog suppression. DesyncWatch now records transition context while the
+  vanilla dialog remains authoritative.
+- Made bucket attribution collision-aware and diagnostic-only, added tick-regression and room
+  resets, and replaced local entity labels with stable type and ID labels.
+- Added standalone per-entity hash chunks, retryable diagnostic wiring, per-call-site RNG leak
+  budgets, and non-mutating Tactician remainder reads.
+- Hardened reflective targets, transpiler match counts, context disposal, finalizers, and logging
+  failure paths across the patch set.
+- Preserved a projectile's frozen end position after launch so the geometry fix cannot restore
+  homing behavior.
+
+This aggregate build has passed source review and compilation but has not completed post-fix
+multiplayer field validation.
+
 ## 0.8.29 to 0.8.32
 
 - Added charge-path source diagnostics for the reported charge, attack, parry, and same-tile
@@ -60,7 +86,7 @@ documentation are grouped with the behavior they support.
 - Prevented dialogue answer-preview getters from advancing the hashed `DialogSystem` stream during
   UI refresh.
 - Added transition-flap dialog policy based on live state attribution and accepted game-mode
-  transitions.
+  transitions. This policy was removed in 0.9.0.
 
 ## 0.8.0 to 0.8.6
 
@@ -78,6 +104,7 @@ documentation are grouped with the behavior they support.
 - Added Steam Networking Messages save transfer with Photon control and fallback.
 - Added the out-of-tick hashed RNG leak detector.
 - Added transition-window desync diagnostics and delayed warnings for confirmed transient flaps.
+  Warning suppression was removed in 0.9.0; transition context remains diagnostic.
 
 ## 0.5.x to 0.6.x
 

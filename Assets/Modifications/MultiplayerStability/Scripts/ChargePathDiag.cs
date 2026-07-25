@@ -14,8 +14,7 @@
 //
 // Since v0.8.30, multiplayer disables partial-cache reuse by returning null from the prefix.
 // Exact target-checked hits stay cached, unmatched paths recompute, and solo is unchanged. This changes
-// simulation behavior and requires exact parity (see DESIGN_NOTES.md); a mixed install changes which
-// path one peer charges along.
+// simulation behavior, so the v0.9 compatibility decision enables it only under exact-build parity.
 //
 // The resolution diagnostic remains enabled. Its installation evidence is limited because the
 // prefix and postfix live in the same patch class, so silence alone is inconclusive (a failed install
@@ -70,19 +69,10 @@ namespace MultiplayerStability
 
             private static bool Prefix(ref object __result)
             {
-                bool multiplayer;
-                try
-                {
-                    multiplayer = NetworkingManager.IsMultiplayer;
-                }
-                catch (Exception)
-                {
-                    return true;                                 // fail-open: vanilla behaviour
-                }
-                if (!multiplayer)
-                    return true;                                 // solo: vanilla partial reuse untouched
-                // Once MP is confirmed, the suppression is unconditional -- logging is best-effort and can
-                // never route back to the defective lookup (the activation-log-in-fail-open pattern has now
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
+                    return true;                                 // solo/unresolved/mixed: vanilla reuse
+                // Once exact parity is confirmed, suppression is unconditional. Logging is best-effort and
+                // can never route back to the defective lookup (the activation-log-in-fail-open pattern has now
                 // bitten three times; rule: activation logs never live inside fail-open trys).
                 __result = null;
                 LogActiveOnce();

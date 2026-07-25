@@ -34,23 +34,22 @@ namespace MultiplayerStability
             {
                 var ctors = AccessTools.GetDeclaredConstructors(typeof(AugmentationsVM));
                 if (ctors == null || ctors.Count == 0)
-                {
-                    MultiplayerStabilityMain.Log("[BarkFix][ERR] AugmentationsVM constructor not found -- containment inactive.");
-                    yield break;
-                }
-                foreach (var c in ctors)
-                    yield return c;
+                    throw new MissingMethodException(
+                        "AugmentationsVM constructor not found; bark containment inactive.");
+                return ctors;
             }
 
-            private static void Prefix()
+            private static void Prefix(out bool __state)
             {
-                s_augVmDepth++;
+                __state = MultiplayerCompatibility.SimulationFixesEnabled;
+                if (__state)
+                    s_augVmDepth++;
             }
 
             // Finalizer, not postfix: the depth must unwind even if the ctor throws.
-            private static Exception Finalizer(Exception __exception)
+            private static Exception Finalizer(bool __state, Exception __exception)
             {
-                if (s_augVmDepth > 0)
+                if (__state && s_augVmDepth > 0)
                     s_augVmDepth--;
                 return __exception;
             }
@@ -64,21 +63,15 @@ namespace MultiplayerStability
 
             private static bool Prefix()
             {
-                try
+                if (!MultiplayerCompatibility.SimulationFixesEnabled || s_augVmDepth == 0)
+                    return true;                                 // vanilla or legitimate sim-side raiser
+                if (!s_loggedActive)
                 {
-                    if (!NetworkingManager.IsMultiplayer || s_augVmDepth == 0)
-                        return true;                             // solo, or a legitimate sim-side raiser
-                    if (!s_loggedActive)
-                    {
-                        s_loggedActive = true;
-                        MultiplayerStabilityMain.Log("[BarkFix] Active -- augmentation-screen barks no longer write hashed player state in multiplayer.");
-                    }
-                    return false;                                // skip: no PlayedBanters add, no bark player
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[BarkFix] Active; augmentation-screen barks cannot write synchronized state.");
+                    s_loggedActive = true;
                 }
-                catch (Exception)
-                {
-                    return true;                                 // fail-open: vanilla behaviour
-                }
+                return false;                                    // logging cannot re-enable the skipped write
             }
         }
     }

@@ -1,58 +1,124 @@
-// Routes co-op save bulk bytes over Steam networking instead of the Photon relay, which delivered
-// approximately 230 KB/s per peer in the recorded tests. Photon remains the control plane:
-// LoadSave/RequestSave/SaveMeta and the session state machine are unchanged. Only the save bytes use
-// Steam, and only when both peers
-// are Steam + have this mod. Anything else (GOG/EGS peer, no mod, Steam init failure, mid-transfer P2P
-// failure) falls back to the vanilla Photon transfer.
+// Optional bulk-save transport over SteamNetworkingMessages.
 //
-// Patch points:
-//   * DataTransporter.SendSave (host) -- prefix: replace the returned Task with our P2P send (or fall back).
-//   * MessageNetManager.OnMessage (both) -- prefix claims free Photon code 100 for the mod handshake
-//     (QUERY/PONG/COMPLETE); every other code runs vanilla.
-//   * SaveNetManager.m_DownloadSaveTcs (receiver) -- DownloadSave awaits this TCS, so completing it
-//     with the Steam-delivered bytes finishes the vanilla flow with no fake receiver and no ack to suppress.
+// Photon remains the control plane. LoadSave, RequestSave, SaveMeta, settings, portraits, and the
+// NetGame state machine are unchanged. Only the packed save byte array may use Steam, and only when
+// the session-latched compatibility gate confirms the exact same build on every peer.
+//
+// Protocol contract:
+//   * Photon code 100 is claimed only when the payload starts with this protocol's magic and version.
+//   * Every control and data frame carries a transfer ID, so stale packets cannot satisfy a new wait.
+//   * The receiver enforces a 512 MiB bound, exact ordered offsets, declared length, and SHA-256.
+//   * COMPLETE is sent only after SaveNetManager's current download TCS accepts the verified bytes.
+//     Missing/stale game state, checksum errors, and rejected completion send NACK and use Photon.
+//   * Multi-peer uploads fall back only for peers that have not acknowledged completion.
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using HarmonyLib;
 using Kingmaker.Networking;
-using Kingmaker.Networking.Player;
 using Steamworks;
 
 namespace MultiplayerStability
 {
     internal static class SteamSaveTransfer
     {
-        private const byte ControlCode = 100;   // free Photon event code (verified: 42-199 unrouted)
-        private const byte MsgQuery = 1, MsgPong = 2, MsgComplete = 3;
-        private const byte FrameHeader = 1, FrameData = 2;
-        private const int ChunkSize = 256 * 1024;         // < Steam 512 KiB message cap
-        private const int QueryTimeoutMs = 3000;          // peer has mod but isn't Steam / silent -> fallback
-        private const int CompleteTimeoutMs = 60000;      // true stall guard; healthy completes in ms
+        private const byte ControlCode = 100;
+        private const uint Magic = 0x5453504D; // "MPST" in little-endian byte order
+        private const byte ProtocolVersion = 1;
 
-        private static readonly AccessTools.FieldRef<SaveNetManager, TaskCompletionSource<byte[]>> DownloadTcsRef =
-            AccessTools.FieldRefAccess<SaveNetManager, TaskCompletionSource<byte[]>>("m_DownloadSaveTcs");
+        private const byte MsgQuery = 1;
+        private const byte MsgPong = 2;
+        private const byte MsgComplete = 3;
+        private const byte MsgNack = 4;
+        private const byte MsgCancel = 5;
 
-        // Host-side pending handshake/completion waiters, keyed by target actor number. Main-thread only.
-        private static readonly Dictionary<int, TaskCompletionSource<ulong>> s_pongWaiters = new Dictionary<int, TaskCompletionSource<ulong>>();
-        private static readonly Dictionary<int, TaskCompletionSource<bool>> s_completeWaiters = new Dictionary<int, TaskCompletionSource<bool>>();
+        private const byte FrameHeader = 1;
+        private const byte FrameData = 2;
 
-        // Receiver-side active download. Main-thread only.
+        private const int ControlFrameSize = 23;
+        private const int HeaderFrameSize = 50;
+        private const int DataFramePrefixSize = 18;
+        private const int ChunkSize = 256 * 1024;
+        private const int MaxSaveBytes = 512 * 1024 * 1024;
+        private const int QueryTimeoutMs = 3000;
+        private const int CompleteTimeoutMs = 60000;
+        private const int ReceiveIdleTimeoutMs = 90000;
+
+        private const int RateStart = 1024 * 1024;
+        private const int RateFloor = 256 * 1024;
+        private const int RateCap = 16 * 1024 * 1024;
+
+        private enum NackReason : byte
+        {
+            None,
+            Incompatible,
+            Busy,
+            InvalidFrame,
+            TooLarge,
+            Checksum,
+            GameRejected,
+            TransportFailed
+        }
+
+        private readonly struct TransferKey : IEquatable<TransferKey>
+        {
+            internal readonly int Actor;
+            internal readonly ulong TransferId;
+
+            internal TransferKey(int actor, ulong transferId)
+            {
+                Actor = actor;
+                TransferId = transferId;
+            }
+
+            public bool Equals(TransferKey other)
+                => Actor == other.Actor && TransferId == other.TransferId;
+
+            public override bool Equals(object obj)
+                => obj is TransferKey other && Equals(other);
+
+            public override int GetHashCode()
+                => (Actor * 397) ^ TransferId.GetHashCode();
+        }
+
+        private sealed class PeerTransfer
+        {
+            internal int Actor;
+            internal ulong TransferId;
+            internal ulong SteamId;
+        }
+
         private sealed class Recv
         {
-            public int HostActor; public ulong HostSteam; public byte[] Buffer; public int Total; public int Received;
-            public IProgress<DataTransferProgressInfo> Progress;
+            internal int HostActor;
+            internal ulong HostSteam;
+            internal ulong TransferId;
+            internal byte[] Buffer;
+            internal byte[] ExpectedHash;
+            internal int Total;
+            internal int Received;
+            internal DateTime LastActivityUtc;
+            internal IProgress<DataTransferProgressInfo> Progress;
         }
-        private static Recv s_recv;
 
-        // SaveNetManager.m_Progress drives the client's loading-bar; private nested type, so reflect once
-        // and use it through the public IProgress interface.
-        private static readonly System.Reflection.FieldInfo ProgressField =
+        private static readonly Dictionary<TransferKey, TaskCompletionSource<ulong>> s_pongWaiters =
+            new Dictionary<TransferKey, TaskCompletionSource<ulong>>();
+        private static readonly Dictionary<TransferKey, TaskCompletionSource<bool>> s_completeWaiters =
+            new Dictionary<TransferKey, TaskCompletionSource<bool>>();
+        private static readonly Dictionary<TransferKey, ulong> s_completeSteamIds =
+            new Dictionary<TransferKey, ulong>();
+
+        private static readonly FieldInfo DownloadTcsField =
+            AccessTools.Field(typeof(SaveNetManager), "m_DownloadSaveTcs");
+        private static readonly FieldInfo ProgressField =
             AccessTools.Field(typeof(SaveNetManager), "m_Progress");
 
-        // Set true while we re-invoke the original SendSave for fallback, so our prefix lets it through.
+        private static Recv s_recv;
         private static bool s_reentry;
+        private static long s_nextTransferId = DateTime.UtcNow.Ticks;
 
         internal static void Wire()
         {
@@ -60,176 +126,276 @@ namespace MultiplayerStability
             SteamP2P.SessionFailed = OnSteamSessionFailed;
         }
 
-        // ---- Host: replace SendSave with the P2P path (or fall back) -----------------------------------
         [HarmonyPatch(typeof(DataTransporter), nameof(DataTransporter.SendSave))]
         private static class DataTransporter_SendSave_P2P_Patch
         {
-            private static bool Prefix(DataTransporter __instance, List<PhotonActorNumber> targetActors,
-                ArraySegment<byte> saveBytes, CancellationToken cancellationToken,
-                IProgress<DataTransferProgressInfo> progress, ref Task __result)
+            private static bool Prefix(
+                DataTransporter __instance,
+                List<PhotonActorNumber> targetActors,
+                ArraySegment<byte> saveBytes,
+                CancellationToken cancellationToken,
+                IProgress<DataTransferProgressInfo> progress,
+                ref Task __result)
             {
                 if (s_reentry)
                     return true;
+
                 try
                 {
-                    if (!SteamP2P.Available || targetActors == null || targetActors.Count == 0)
+                    if (!MultiplayerCompatibility.ProtocolsEnabled
+                        || !SteamP2P.Available
+                        || targetActors == null
+                        || targetActors.Count == 0
+                        || saveBytes.Array == null
+                        || saveBytes.Count <= 0
+                        || saveBytes.Count > MaxSaveBytes)
+                    {
                         return true;
-                    if (!AllTargetsHaveMod(targetActors))
-                        return true;
+                    }
                 }
                 catch (Exception e)
                 {
-                    MultiplayerStabilityMain.Log("[Transfer][ERR] P2P gate, staying vanilla: " + e);
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Transfer][ERR] P2P gate failed; using Photon: " + e.Message);
                     return true;
                 }
-                MultiplayerStabilityMain.Log("[Transfer] Steam P2P path for " + targetActors.Count + " target(s), " + (saveBytes.Count / 1024) + "KB.");
+
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer] Steam path offered to " + targetActors.Count + " peer(s), "
+                    + (saveBytes.Count / 1024) + "KB.");
                 __result = HostFlow(__instance, targetActors, saveBytes, cancellationToken, progress);
                 return false;
             }
         }
 
-        private static async Task HostFlow(DataTransporter dt, List<PhotonActorNumber> targets,
-            ArraySegment<byte> bytes, CancellationToken ct, IProgress<DataTransferProgressInfo> progress)
+        private static async Task HostFlow(
+            DataTransporter transporter,
+            List<PhotonActorNumber> targets,
+            ArraySegment<byte> bytes,
+            CancellationToken cancellationToken,
+            IProgress<DataTransferProgressInfo> progress)
         {
+            var pending = new List<PhotonActorNumber>(targets);
             try
             {
                 SteamP2P.EnsureInit();
-                Dictionary<int, ulong> peers = await ResolvePeers(targets, ct);
-                foreach (var kv in peers)
-                    SteamP2P.AllowSessionFrom(kv.Value);
-                foreach (var kv in peers)
-                    await SendToPeer(kv.Key, kv.Value, bytes, progress, ct);
-                MultiplayerStabilityMain.Log("[Transfer] P2P upload complete (" + (bytes.Count / 1024) + "KB).");
-                return;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;   // honor cancellation exactly like vanilla SendSave
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[Transfer] P2P failed -> Photon fallback: " + e.Message);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer] Steam initialization failed; using Photon: " + e.Message);
+                await SendPhotonFallback(
+                    transporter, pending, bytes, cancellationToken, progress);
+                return;
             }
 
-            // Fallback: run the original SendSave (guard re-entry so our prefix lets it through).
-            s_reentry = true;
-            Task vanilla;
-            try { vanilla = dt.SendSave(targets, bytes, ct, progress); }
-            finally { s_reentry = false; }
-            await vanilla;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                PhotonActorNumber target = targets[i];
+                PeerTransfer peer = null;
+                try
+                {
+                    peer = await ResolvePeer(target.ActorNumber, cancellationToken);
+                    await SendToPeer(peer, bytes, progress, cancellationToken);
+                    RemoveActor(pending, target.ActorNumber);
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Transfer] Actor " + target.ActorNumber + " accepted verified Steam bytes.");
+                }
+                catch (OperationCanceledException)
+                {
+                    if (peer != null)
+                        CancelPeer(peer, NackReason.TransportFailed);
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    if (peer != null)
+                        CancelPeer(peer, NackReason.TransportFailed);
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Transfer] Actor " + target.ActorNumber + " will use Photon: " + e.Message);
+                }
+            }
+
+            if (pending.Count == 0)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer] Steam upload complete (" + (bytes.Count / 1024) + "KB).");
+                return;
+            }
+
+            await SendPhotonFallback(transporter, pending, bytes, cancellationToken, progress);
         }
 
-        private static async Task<Dictionary<int, ulong>> ResolvePeers(List<PhotonActorNumber> targets, CancellationToken ct)
+        private static async Task SendPhotonFallback(
+            DataTransporter transporter,
+            List<PhotonActorNumber> pending,
+            ArraySegment<byte> bytes,
+            CancellationToken cancellationToken,
+            IProgress<DataTransferProgressInfo> progress)
         {
-            var waiters = new List<KeyValuePair<int, Task<ulong>>>();
-            foreach (var t in targets)
-            {
-                int actor = t.ActorNumber;
-                var tcs = new TaskCompletionSource<ulong>(TaskCreationOptions.RunContinuationsAsynchronously);
-                s_pongWaiters[actor] = tcs;
-                SendControl(actor, MsgQuery, SteamP2P.LocalSteamId);
-                waiters.Add(new KeyValuePair<int, Task<ulong>>(actor, tcs.Task));
-            }
+            MultiplayerStabilityMain.LogNoThrow(
+                "[Transfer] Photon fallback for " + pending.Count + " unfinished peer(s).");
+            s_reentry = true;
+            Task vanilla;
             try
             {
-                var all = new List<Task>(waiters.Count);
-                foreach (var w in waiters) all.Add(w.Value);
-                await WithTimeout(Task.WhenAll(all), QueryTimeoutMs, ct);
+                vanilla = transporter.SendSave(pending, bytes, cancellationToken, progress);
             }
             finally
             {
-                foreach (var w in waiters) s_pongWaiters.Remove(w.Key);
+                s_reentry = false;
             }
-            var map = new Dictionary<int, ulong>();
-            foreach (var w in waiters) map[w.Key] = w.Value.Result;
-            return map;
+            await vanilla;
         }
 
-        // Adaptive send rate. Valve's transport sends at a FIXED rate (clamp of SendRateMin; no upward
-        // probing is implemented), so the mod finds path capacity itself: start at 1 MB/s, double while
-        // delivery keeps up (>=80% of rate), halve on loss (<50%). Field tests: a fixed 4 MB/s floor on
-        // this pair's path collapsed goodput to ~3% via retransmits; fixed low floors waste good links.
-        private const int RateStart = 1024 * 1024;
-        private const int RateFloor = 256 * 1024;
-        private const int RateCap = 16 * 1024 * 1024;
-
-        private static async Task SendToPeer(int actor, ulong steamId, ArraySegment<byte> bytes,
-            IProgress<DataTransferProgressInfo> progress, CancellationToken ct)
+        private static async Task<PeerTransfer> ResolvePeer(int actor, CancellationToken cancellationToken)
         {
-            var completeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            s_completeWaiters[actor] = completeTcs;
+            ulong transferId = unchecked((ulong)Interlocked.Increment(ref s_nextTransferId));
+            var key = new TransferKey(actor, transferId);
+            var waiter = new TaskCompletionSource<ulong>(TaskCreationOptions.RunContinuationsAsynchronously);
+            s_pongWaiters[key] = waiter;
+            bool querySent = false;
             try
             {
-                var header = new byte[5];
-                header[0] = FrameHeader;
-                WriteInt32(header, 1, bytes.Count);
-                if (SteamP2P.Send(steamId, header, header.Length) != EResult.k_EResultOK)
-                    throw new Exception("header send failed");
+                if (!SendControl(actor, MsgQuery, transferId, SteamP2P.LocalSteamId, NackReason.None))
+                    throw new Exception("query send failed");
+                querySent = true;
+                await WithTimeout(waiter.Task, QueryTimeoutMs, cancellationToken);
+                ulong steamId = await waiter.Task;
+                return new PeerTransfer
+                {
+                    Actor = actor,
+                    TransferId = transferId,
+                    SteamId = steamId
+                };
+            }
+            catch
+            {
+                if (querySent)
+                {
+                    SendControl(
+                        actor,
+                        MsgCancel,
+                        transferId,
+                        SteamP2P.LocalSteamId,
+                        NackReason.TransportFailed);
+                }
+                throw;
+            }
+            finally
+            {
+                s_pongWaiters.Remove(key);
+            }
+        }
+
+        private static async Task SendToPeer(
+            PeerTransfer peer,
+            ArraySegment<byte> bytes,
+            IProgress<DataTransferProgressInfo> progress,
+            CancellationToken cancellationToken)
+        {
+            var key = new TransferKey(peer.Actor, peer.TransferId);
+            var complete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            s_completeWaiters[key] = complete;
+            s_completeSteamIds[key] = peer.SteamId;
+            SteamP2P.AllowSessionFrom(peer.SteamId);
+            try
+            {
+                byte[] digest;
+                using (var sha = SHA256.Create())
+                    digest = sha.ComputeHash(bytes.Array, bytes.Offset, bytes.Count);
+
+                var header = new byte[HeaderFrameSize];
+                WriteUInt32(header, 0, Magic);
+                header[4] = ProtocolVersion;
+                header[5] = FrameHeader;
+                WriteUInt64(header, 6, peer.TransferId);
+                WriteInt32(header, 14, bytes.Count);
+                Buffer.BlockCopy(digest, 0, header, 18, digest.Length);
+                EnsureSent(peer.SteamId, header, "header");
 
                 int rate = RateStart;
                 SteamP2P.SetSendRateFloor(rate);
                 long lastDelivered = 0;
                 int lastTick = Environment.TickCount;
-                int off = 0, sent = 0, chunkNo = 0;
+                int offset = 0;
+                int sent = 0;
+                int chunkNo = 0;
 
                 void RateTick()
                 {
                     int now = Environment.TickCount;
-                    double dt = (now - lastTick) / 1000.0;
-                    if (dt < 1.8)
+                    double elapsed = unchecked(now - lastTick) / 1000.0;
+                    if (elapsed < 1.8
+                        || !SteamP2P.TryGetSessionNumbers(
+                            peer.SteamId, out int ping, out _, out float wire, out long pending, out string via))
+                    {
                         return;
-                    if (!SteamP2P.TryGetSessionNumbers(steamId, out int ping, out _, out float wire, out long pend, out string via))
-                        return;
-                    long delivered = sent - pend;                     // bytes confirmed out of Steam's buffer
-                    double goodput = (delivered - lastDelivered) / dt;
+                    }
+
+                    long delivered = sent - pending;
+                    double goodput = (delivered - lastDelivered) / elapsed;
                     lastTick = now;
                     lastDelivered = delivered;
-                    if (goodput >= rate * 0.8) rate = Math.Min(rate * 2, RateCap);
-                    else if (goodput < rate * 0.5) rate = Math.Max(rate / 2, RateFloor);
+                    if (goodput >= rate * 0.8)
+                        rate = Math.Min(rate * 2, RateCap);
+                    else if (goodput < rate * 0.5)
+                        rate = Math.Max(rate / 2, RateFloor);
                     SteamP2P.SetSendRateFloor(rate);
-                    MultiplayerStabilityMain.Log("[Transfer] P2P " + (sent / 1024) + "/" + (bytes.Count / 1024)
-                        + "KB queued; goodput=" + (int)(goodput / 1024) + "KB/s rateCtl=" + (rate / 1024)
-                        + "KB/s ping=" + ping + "ms wire=" + (int)(wire / 1024f) + "KB/s pending=" + (pend / 1024)
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Transfer] actor=" + peer.Actor + " " + (sent / 1024) + "/"
+                        + (bytes.Count / 1024) + "KB queued; goodput=" + (int)(goodput / 1024)
+                        + "KB/s rateCtl=" + (rate / 1024) + "KB/s ping=" + ping
+                        + "ms wire=" + (int)(wire / 1024f) + "KB/s pending=" + (pending / 1024)
                         + "KB via [" + via + "]");
                 }
 
-                while (off < bytes.Count)
+                while (offset < bytes.Count)
                 {
-                    ct.ThrowIfCancellationRequested();
+                    cancellationToken.ThrowIfCancellationRequested();
                     RateTick();
-                    int len = Math.Min(ChunkSize, bytes.Count - off);
-                    var frame = new byte[len + 1];
-                    frame[0] = FrameData;
-                    Buffer.BlockCopy(bytes.Array, bytes.Offset + off, frame, 1, len);
+                    int payloadLength = Math.Min(ChunkSize, bytes.Count - offset);
+                    var frame = new byte[DataFramePrefixSize + payloadLength];
+                    WriteUInt32(frame, 0, Magic);
+                    frame[4] = ProtocolVersion;
+                    frame[5] = FrameData;
+                    WriteUInt64(frame, 6, peer.TransferId);
+                    WriteInt32(frame, 14, offset);
+                    Buffer.BlockCopy(
+                        bytes.Array, bytes.Offset + offset, frame, DataFramePrefixSize, payloadLength);
 
-                    EResult res;
-                    int guard = 0;
-                    while ((res = SteamP2P.Send(steamId, frame, frame.Length)) == EResult.k_EResultLimitExceeded)
+                    EResult result;
+                    int backpressureIterations = 0;
+                    while ((result = SteamP2P.Send(peer.SteamId, frame, frame.Length))
+                        == EResult.k_EResultLimitExceeded)
                     {
-                        ct.ThrowIfCancellationRequested();
+                        cancellationToken.ThrowIfCancellationRequested();
                         RateTick();
-                        await Task.Delay(4, ct);                       // backpressure: Steam send buffer full
-                        if (++guard > 15000) throw new Exception("send backpressure stuck");
+                        await Task.Delay(4, cancellationToken);
+                        if (++backpressureIterations > 15000)
+                            throw new Exception("send backpressure did not clear");
                     }
-                    if (res != EResult.k_EResultOK)
-                        throw new Exception("data send failed: " + res);
+                    if (result != EResult.k_EResultOK)
+                        throw new Exception("data send failed: " + result);
 
-                    off += len; sent += len;
-                    progress?.Report(new DataTransferProgressInfo(len, sent, bytes.Count));
-                    if ((++chunkNo & 7) == 0) await Task.Yield();      // keep the frame responsive
+                    offset += payloadLength;
+                    sent += payloadLength;
+                    ReportProgressNoThrow(progress, payloadLength, sent, bytes.Count);
+                    if ((++chunkNo & 7) == 0)
+                        await Task.Yield();
                 }
 
-                // Tail: everything is queued but up to SendBufferSize is still draining to the peer --
-                // keep adapting the rate and reporting until the receiver confirms completion.
                 int waitedMs = 0;
                 while (true)
                 {
-                    var done = await Task.WhenAny(completeTcs.Task, Task.Delay(2000, ct));
-                    if (done == completeTcs.Task)
+                    Task finished = await Task.WhenAny(complete.Task, Task.Delay(2000, cancellationToken));
+                    if (finished == complete.Task)
                     {
-                        await completeTcs.Task;
+                        await complete.Task;
                         break;
                     }
+                    cancellationToken.ThrowIfCancellationRequested();
                     RateTick();
                     waitedMs += 2000;
                     if (waitedMs >= CompleteTimeoutMs)
@@ -238,163 +404,553 @@ namespace MultiplayerStability
             }
             finally
             {
-                s_completeWaiters.Remove(actor);
-                SteamP2P.DisallowSessionFrom(steamId);
-                SteamP2P.CloseSession(steamId);
+                s_completeWaiters.Remove(key);
+                s_completeSteamIds.Remove(key);
+                SteamP2P.DisallowSessionFrom(peer.SteamId);
+                SteamP2P.CloseSession(peer.SteamId);
             }
         }
 
-        // ---- Both: mod handshake over Photon code 100 --------------------------------------------------
         [HarmonyPatch(typeof(MessageNetManager), nameof(MessageNetManager.OnMessage))]
         private static class MessageNetManager_OnMessage_Control_Patch
         {
             private static bool Prefix(byte code, int actorNumber, ReadOnlySpan<byte> bytes)
             {
-                if (code != ControlCode)
+                if (code != ControlCode || !HasMagic(bytes))
                     return true;
-                try { OnControl(actorNumber, bytes.ToArray()); }
-                catch (Exception e) { MultiplayerStabilityMain.Log("[Transfer][ERR] control msg: " + e); }
-                return false;   // consumed
+
+                try
+                {
+                    OnControl(actorNumber, bytes);
+                }
+                catch (Exception e)
+                {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Transfer][ERR] rejected control frame: " + e.Message);
+                }
+                return false;
             }
         }
 
-        private static void OnControl(int actor, byte[] data)
+        private static void OnControl(int actor, ReadOnlySpan<byte> data)
         {
-            if (data.Length < 9)
+            if (data.Length != ControlFrameSize)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer][ERR] control frame length " + data.Length + " (expected "
+                    + ControlFrameSize + ").");
                 return;
-            byte type = data[0];
-            ulong steamId = BitConverter.ToUInt64(data, 1);
+            }
+            if (data[4] != ProtocolVersion)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer][ERR] unsupported protocol version " + data[4] + ".");
+                return;
+            }
+
+            byte type = data[5];
+            ulong transferId = ReadUInt64(data, 6);
+            ulong steamId = ReadUInt64(data, 14);
+            var reason = (NackReason)data[22];
+            var key = new TransferKey(actor, transferId);
+
             switch (type)
             {
                 case MsgQuery:
-                    if (SteamP2P.Available)
-                    {
-                        SteamP2P.EnsureInit();
-                        s_recv = new Recv { HostActor = actor, HostSteam = steamId };
-                        SteamP2P.AllowSessionFrom(steamId);
-                        SendControl(actor, MsgPong, SteamP2P.LocalSteamId);
-                        MultiplayerStabilityMain.Log("[Transfer] Armed P2P receive from actor " + actor + " (steam " + steamId + ").");
-                    }
-                    // else: not Steam -> stay silent; the host times out and falls back to Photon.
+                    HandleQuery(actor, transferId, steamId);
                     break;
                 case MsgPong:
-                    if (s_pongWaiters.TryGetValue(actor, out var pw)) pw.TrySetResult(steamId);
+                    if (s_pongWaiters.TryGetValue(key, out TaskCompletionSource<ulong> pong))
+                    {
+                        if (steamId == 0UL)
+                            pong.TrySetException(new Exception("peer returned an invalid Steam ID"));
+                        else
+                            pong.TrySetResult(steamId);
+                    }
                     break;
                 case MsgComplete:
-                    if (s_completeWaiters.TryGetValue(actor, out var cw)) cw.TrySetResult(true);
+                    if (s_completeWaiters.TryGetValue(key, out TaskCompletionSource<bool> complete))
+                        complete.TrySetResult(true);
+                    break;
+                case MsgNack:
+                    var error = new Exception("peer NACK: " + reason);
+                    if (s_pongWaiters.TryGetValue(key, out TaskCompletionSource<ulong> query))
+                        query.TrySetException(error);
+                    if (s_completeWaiters.TryGetValue(key, out TaskCompletionSource<bool> ack))
+                        ack.TrySetException(error);
+                    break;
+                case MsgCancel:
+                    if (s_recv != null
+                        && s_recv.HostActor == actor
+                        && s_recv.TransferId == transferId)
+                    {
+                        CloseReceive(s_recv);
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[Transfer] Receive cancelled for actor " + actor + ".");
+                    }
+                    break;
+                default:
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Transfer][ERR] unknown control message " + type + ".");
                     break;
             }
         }
 
-        // ---- Receiver: reassemble Steam bytes and complete the vanilla download ------------------------
-        private static void OnSteamData(ulong from, byte[] msg)
+        private static void HandleQuery(int actor, ulong transferId, ulong hostSteam)
         {
-            var recv = s_recv;
-            if (recv == null || from != recv.HostSteam || msg.Length < 1)
-                return;
-            switch (msg[0])
+            if (!MultiplayerCompatibility.ProtocolsEnabled)
             {
-                case FrameHeader:
-                    if (msg.Length < 5) return;
-                    recv.Total = BitConverter.ToInt32(msg, 1);
-                    recv.Buffer = new byte[recv.Total];
-                    recv.Received = 0;
-                    try { recv.Progress = ProgressField?.GetValue(PhotonManager.Save) as IProgress<DataTransferProgressInfo>; }
-                    catch (Exception) { recv.Progress = null; }
-                    break;
-                case FrameData:
-                    if (recv.Buffer == null) return;
-                    int len = msg.Length - 1;
-                    if (recv.Received + len > recv.Total) return;   // guard stale/overflow
-                    Buffer.BlockCopy(msg, 1, recv.Buffer, recv.Received, len);
-                    recv.Received += len;
-                    recv.Progress?.Report(new DataTransferProgressInfo(len, recv.Received, recv.Total));
-                    if (recv.Received >= recv.Total)
-                        CompleteReceive(recv);
-                    break;
+                SendControl(actor, MsgNack, transferId, SteamP2P.LocalSteamId, NackReason.Incompatible);
+                return;
             }
+            if (!SteamP2P.Available)
+            {
+                SendControl(actor, MsgNack, transferId, 0UL, NackReason.TransportFailed);
+                return;
+            }
+            if (hostSteam == 0UL)
+            {
+                SendControl(actor, MsgNack, transferId, SteamP2P.LocalSteamId, NackReason.InvalidFrame);
+                return;
+            }
+
+            SteamP2P.EnsureInit();
+            if (s_recv != null
+                && DateTime.UtcNow - s_recv.LastActivityUtc
+                    >= TimeSpan.FromMilliseconds(ReceiveIdleTimeoutMs))
+            {
+                Recv expired = s_recv;
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer][WARN] Discarding idle receive " + expired.TransferId
+                    + " before accepting a new query.");
+                CloseReceive(expired);
+            }
+            if (s_recv != null)
+            {
+                if (s_recv.HostActor == actor && s_recv.TransferId == transferId)
+                {
+                    s_recv.LastActivityUtc = DateTime.UtcNow;
+                    SendControl(actor, MsgPong, transferId, SteamP2P.LocalSteamId, NackReason.None);
+                    return;
+                }
+                SendControl(actor, MsgNack, transferId, SteamP2P.LocalSteamId, NackReason.Busy);
+                return;
+            }
+
+            s_recv = new Recv
+            {
+                HostActor = actor,
+                HostSteam = hostSteam,
+                TransferId = transferId,
+                LastActivityUtc = DateTime.UtcNow
+            };
+            SteamP2P.AllowSessionFrom(hostSteam);
+            if (!SendControl(actor, MsgPong, transferId, SteamP2P.LocalSteamId, NackReason.None))
+            {
+                CloseReceive(s_recv);
+                return;
+            }
+            MultiplayerStabilityMain.LogNoThrow(
+                "[Transfer] Armed receive actor=" + actor + " transfer=" + transferId + ".");
+        }
+
+        private static void OnSteamData(ulong from, byte[] message)
+        {
+            try
+            {
+                Recv recv = s_recv;
+                if (recv == null
+                    || from != recv.HostSteam
+                    || message == null
+                    || message.Length < DataFramePrefixSize
+                    || ReadUInt32(message, 0) != Magic
+                    || message[4] != ProtocolVersion
+                    || ReadUInt64(message, 6) != recv.TransferId)
+                {
+                    return;
+                }
+
+                switch (message[5])
+                {
+                    case FrameHeader:
+                        recv.LastActivityUtc = DateTime.UtcNow;
+                        ReceiveHeader(recv, message);
+                        break;
+                    case FrameData:
+                        recv.LastActivityUtc = DateTime.UtcNow;
+                        ReceiveData(recv, message);
+                        break;
+                    default:
+                        RejectReceive(recv, NackReason.InvalidFrame, "unknown Steam frame type");
+                        break;
+                }
+            }
+            catch (Exception e)
+            {
+                Recv recv = s_recv;
+                if (recv != null)
+                    RejectReceive(recv, NackReason.InvalidFrame, "receiver exception: " + e.Message);
+            }
+        }
+
+        private static void ReceiveHeader(Recv recv, byte[] message)
+        {
+            if (message.Length != HeaderFrameSize || recv.Buffer != null)
+            {
+                RejectReceive(recv, NackReason.InvalidFrame, "invalid or duplicate header");
+                return;
+            }
+
+            int total = ReadInt32(message, 14);
+            if (total <= 0 || total > MaxSaveBytes)
+            {
+                RejectReceive(recv, NackReason.TooLarge, "declared size " + total);
+                return;
+            }
+
+            recv.Total = total;
+            recv.Buffer = new byte[total];
+            recv.ExpectedHash = new byte[32];
+            Buffer.BlockCopy(message, 18, recv.ExpectedHash, 0, recv.ExpectedHash.Length);
+            recv.Received = 0;
+            try
+            {
+                recv.Progress = ProgressField?.GetValue(PhotonManager.Save)
+                    as IProgress<DataTransferProgressInfo>;
+            }
+            catch
+            {
+                recv.Progress = null;
+            }
+        }
+
+        private static void ReceiveData(Recv recv, byte[] message)
+        {
+            if (recv.Buffer == null || message.Length <= DataFramePrefixSize)
+            {
+                RejectReceive(recv, NackReason.InvalidFrame, "data arrived before header");
+                return;
+            }
+
+            int offset = ReadInt32(message, 14);
+            int payloadLength = message.Length - DataFramePrefixSize;
+            if (offset != recv.Received
+                || payloadLength > ChunkSize
+                || payloadLength > recv.Total - recv.Received)
+            {
+                RejectReceive(
+                    recv,
+                    NackReason.InvalidFrame,
+                    "offset " + offset + ", expected " + recv.Received + ", payload " + payloadLength);
+                return;
+            }
+
+            Buffer.BlockCopy(message, DataFramePrefixSize, recv.Buffer, offset, payloadLength);
+            recv.Received += payloadLength;
+            ReportProgressNoThrow(recv.Progress, payloadLength, recv.Received, recv.Total);
+            if (recv.Received == recv.Total)
+                CompleteReceive(recv);
         }
 
         private static void CompleteReceive(Recv recv)
         {
-            s_recv = null;
-            var save = PhotonManager.Save;
-            var tcs = (save != null) ? DownloadTcsRef(save) : null;
-            if (tcs == null)
+            byte[] actual;
+            using (var sha = SHA256.Create())
+                actual = sha.ComputeHash(recv.Buffer);
+            if (!FixedTimeEquals(actual, recv.ExpectedHash))
             {
-                MultiplayerStabilityMain.Log("[Transfer][ERR] no download TCS; letting Photon fallback deliver.");
+                RejectReceive(recv, NackReason.Checksum, "SHA-256 mismatch");
+                return;
             }
-            else if (!save.InProcess)
+
+            bool accepted = false;
+            string failure = null;
+            try
             {
-                MultiplayerStabilityMain.Log("[Transfer][ERR] save not InProcess; discarding P2P bytes.");
+                SaveNetManager save = PhotonManager.Save;
+                var tcs = save != null
+                    ? DownloadTcsField?.GetValue(save) as TaskCompletionSource<byte[]>
+                    : null;
+                if (save == null)
+                    failure = "SaveNetManager unavailable";
+                else if (!save.InProcess)
+                    failure = "save is not in process";
+                else if (tcs == null)
+                    failure = "download TCS unavailable";
+                else
+                    accepted = tcs.TrySetResult(recv.Buffer);
+                if (!accepted && failure == null)
+                    failure = "download TCS rejected completion";
             }
-            else
+            catch (Exception e)
             {
-                bool set = tcs.TrySetResult(recv.Buffer);
-                MultiplayerStabilityMain.Log("[Transfer] P2P download complete (" + (recv.Total / 1024) + "KB), fed to game=" + set + ".");
+                failure = "game completion failed: " + e.Message;
             }
-            SendControl(recv.HostActor, MsgComplete, SteamP2P.LocalSteamId);
+
+            if (accepted)
+            {
+                // The game has accepted the bytes and cannot be rolled back. Repeat the small reliable
+                // completion frame so a transient control-send failure is unlikely to make the host time out
+                // and resend the same save over Photon. Duplicate completion frames are idempotent.
+                bool acknowledgementSent = false;
+                for (int i = 0; i < 3; i++)
+                {
+                    acknowledgementSent |= SendControl(
+                        recv.HostActor,
+                        MsgComplete,
+                        recv.TransferId,
+                        SteamP2P.LocalSteamId,
+                        NackReason.None);
+                }
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer] Verified download accepted by game (" + (recv.Total / 1024)
+                    + "KB); completion acknowledgement sent=" + acknowledgementSent + ".");
+                CloseReceive(recv);
+                return;
+            }
+
+            RejectReceive(recv, NackReason.GameRejected, failure);
+        }
+
+        private static void RejectReceive(Recv recv, NackReason reason, string detail)
+        {
+            SendControl(
+                recv.HostActor,
+                MsgNack,
+                recv.TransferId,
+                SteamP2P.LocalSteamId,
+                reason);
+            MultiplayerStabilityMain.LogNoThrow(
+                "[Transfer][ERR] Rejected Steam transfer " + recv.TransferId + ": " + detail
+                + "; host will use Photon.");
+            CloseReceive(recv);
+        }
+
+        private static void CloseReceive(Recv recv)
+        {
+            if (recv == null)
+                return;
+            if (ReferenceEquals(s_recv, recv))
+                s_recv = null;
             SteamP2P.DisallowSessionFrom(recv.HostSteam);
             SteamP2P.CloseSession(recv.HostSteam);
         }
 
+        private static void CancelPeer(PeerTransfer peer, NackReason reason)
+        {
+            SendControl(
+                peer.Actor,
+                MsgCancel,
+                peer.TransferId,
+                SteamP2P.LocalSteamId,
+                reason);
+            SteamP2P.DisallowSessionFrom(peer.SteamId);
+            SteamP2P.CloseSession(peer.SteamId);
+        }
+
         private static void OnSteamSessionFailed(ulong steamId)
         {
-            // A dropped Steam session means P2P is dead for this transfer: fault every pending waiter so
-            // the host falls back to Photon, and drop any half-built receive so Photon fallback can deliver.
-            var ex = new Exception("steam session failed");
-            foreach (var w in s_pongWaiters.Values) w.TrySetException(ex);
-            foreach (var c in s_completeWaiters.Values) c.TrySetException(ex);
-            if (s_recv != null && s_recv.HostSteam == steamId) s_recv = null;
+            var error = new Exception("Steam session failed");
+            var affected = new List<TransferKey>();
+            foreach (var pair in s_completeSteamIds)
+            {
+                if (pair.Value == steamId)
+                    affected.Add(pair.Key);
+            }
+            for (int i = 0; i < affected.Count; i++)
+            {
+                if (s_completeWaiters.TryGetValue(
+                    affected[i], out TaskCompletionSource<bool> waiter))
+                {
+                    waiter.TrySetException(error);
+                }
+            }
+
+            if (s_recv != null && s_recv.HostSteam == steamId)
+            {
+                Recv recv = s_recv;
+                SendControl(
+                    recv.HostActor,
+                    MsgNack,
+                    recv.TransferId,
+                    SteamP2P.LocalSteamId,
+                    NackReason.TransportFailed);
+                CloseReceive(recv);
+            }
         }
 
-        // ---- helpers -----------------------------------------------------------------------------------
-        private static bool AllTargetsHaveMod(List<PhotonActorNumber> targets)
+        internal static void ResetSession(string reason)
         {
-            var photon = PhotonManager.Instance;
-            if (photon == null)
+            var error = new OperationCanceledException("Steam transfer reset: " + reason);
+            var outgoingSteamIds = new HashSet<ulong>(s_completeSteamIds.Values);
+            foreach (TaskCompletionSource<ulong> waiter in s_pongWaiters.Values)
+                waiter.TrySetException(error);
+            foreach (TaskCompletionSource<bool> waiter in s_completeWaiters.Values)
+                waiter.TrySetException(error);
+            s_pongWaiters.Clear();
+            s_completeWaiters.Clear();
+            s_completeSteamIds.Clear();
+            foreach (ulong steamId in outgoingSteamIds)
+            {
+                SteamP2P.DisallowSessionFrom(steamId);
+                SteamP2P.CloseSession(steamId);
+            }
+
+            Recv recv = s_recv;
+            if (recv != null)
+                CloseReceive(recv);
+            MultiplayerStabilityMain.LogNoThrow("[Transfer] Session state reset (" + reason + ").");
+        }
+
+        private static bool SendControl(
+            int actor,
+            byte type,
+            ulong transferId,
+            ulong steamId,
+            NackReason reason)
+        {
+            var frame = new byte[ControlFrameSize];
+            WriteUInt32(frame, 0, Magic);
+            frame[4] = ProtocolVersion;
+            frame[5] = type;
+            WriteUInt64(frame, 6, transferId);
+            WriteUInt64(frame, 14, steamId);
+            frame[22] = (byte)reason;
+            try
+            {
+                return PhotonManager.Instance != null
+                    && PhotonManager.Instance.SendMessageTo(
+                        new PhotonActorNumber(actor), ControlCode, frame, 0, frame.Length);
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer][ERR] control send actor=" + actor + " type=" + type + ": " + e.Message);
                 return false;
-            foreach (var t in targets)
-            {
-                string userId = null;
-                foreach (PlayerInfo pi in photon.AllPlayers)
-                    if (pi.Player.ActorNumber == t.ActorNumber) { userId = pi.UserId; break; }
-                if (userId == null || !PhotonManager.Mods.TryGetModsData(userId, out var mods) || mods == null)
-                    return false;
-                bool has = false;
-                foreach (var m in mods)
-                    if (m.Id == MultiplayerStabilityMain.UniqueName) { has = true; break; }
-                if (!has)
-                    return false;
             }
-            return true;
         }
 
-        private static void SendControl(int actor, byte type, ulong steamId)
+        private static void EnsureSent(ulong steamId, byte[] frame, string kind)
         {
-            var buf = new byte[9];
-            buf[0] = type;
-            byte[] idb = BitConverter.GetBytes(steamId);
-            Buffer.BlockCopy(idb, 0, buf, 1, 8);
-            PhotonManager.Instance?.SendMessageTo(new PhotonActorNumber(actor), ControlCode, buf, 0, buf.Length);
+            EResult result = SteamP2P.Send(steamId, frame, frame.Length);
+            if (result != EResult.k_EResultOK)
+                throw new Exception(kind + " send failed: " + result);
         }
 
-        private static void WriteInt32(byte[] buf, int offset, int value)
+        private static void RemoveActor(List<PhotonActorNumber> actors, int actor)
         {
-            byte[] b = BitConverter.GetBytes(value);
-            Buffer.BlockCopy(b, 0, buf, offset, 4);
-        }
-
-        private static async Task WithTimeout(Task task, int ms, CancellationToken ct)
-        {
-            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            for (int i = actors.Count - 1; i >= 0; i--)
             {
-                var finished = await Task.WhenAny(task, Task.Delay(ms, cts.Token));
+                if (actors[i].ActorNumber == actor)
+                {
+                    actors.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+
+        private static void ReportProgressNoThrow(
+            IProgress<DataTransferProgressInfo> progress,
+            int delta,
+            int current,
+            int total)
+        {
+            try
+            {
+                progress?.Report(new DataTransferProgressInfo(delta, current, total));
+            }
+            catch
+            {
+                // UI progress is not part of the transfer acceptance contract.
+            }
+        }
+
+        private static bool HasMagic(ReadOnlySpan<byte> bytes)
+            => bytes.Length >= 4 && ReadUInt32(bytes, 0) == Magic;
+
+        private static bool FixedTimeEquals(byte[] left, byte[] right)
+        {
+            if (left == null || right == null || left.Length != right.Length)
+                return false;
+            int diff = 0;
+            for (int i = 0; i < left.Length; i++)
+                diff |= left[i] ^ right[i];
+            return diff == 0;
+        }
+
+        private static void WriteInt32(byte[] buffer, int offset, int value)
+            => WriteUInt32(buffer, offset, unchecked((uint)value));
+
+        private static void WriteUInt32(byte[] buffer, int offset, uint value)
+        {
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+            buffer[offset + 2] = (byte)(value >> 16);
+            buffer[offset + 3] = (byte)(value >> 24);
+        }
+
+        private static void WriteUInt64(byte[] buffer, int offset, ulong value)
+        {
+            for (int i = 0; i < 8; i++)
+                buffer[offset + i] = (byte)(value >> (i * 8));
+        }
+
+        private static int ReadInt32(byte[] buffer, int offset)
+            => unchecked((int)ReadUInt32(buffer, offset));
+
+        private static uint ReadUInt32(byte[] buffer, int offset)
+            => (uint)(buffer[offset]
+                | (buffer[offset + 1] << 8)
+                | (buffer[offset + 2] << 16)
+                | (buffer[offset + 3] << 24));
+
+        private static uint ReadUInt32(ReadOnlySpan<byte> buffer, int offset)
+            => (uint)(buffer[offset]
+                | (buffer[offset + 1] << 8)
+                | (buffer[offset + 2] << 16)
+                | (buffer[offset + 3] << 24));
+
+        private static ulong ReadUInt64(ReadOnlySpan<byte> buffer, int offset)
+        {
+            ulong value = 0;
+            for (int i = 0; i < 8; i++)
+                value |= (ulong)buffer[offset + i] << (i * 8);
+            return value;
+        }
+
+        private static ulong ReadUInt64(byte[] buffer, int offset)
+        {
+            ulong value = 0;
+            for (int i = 0; i < 8; i++)
+                value |= (ulong)buffer[offset + i] << (i * 8);
+            return value;
+        }
+
+        private static async Task WithTimeout(Task task, int milliseconds, CancellationToken cancellationToken)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                Task finished = await Task.WhenAny(task, Task.Delay(milliseconds, timeout.Token));
                 if (finished != task)
-                    throw new TimeoutException("P2P step timed out after " + ms + "ms");
-                cts.Cancel();
-                await task;   // observe result / propagate exception
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new TimeoutException("P2P step timed out after " + milliseconds + "ms");
+                }
+                timeout.Cancel();
+                await task;
             }
         }
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnLeave))]
+    internal static class ModsNetManager_OnLeave_SteamTransferReset_Patch
+    {
+        private static void Postfix() => SteamSaveTransfer.ResetSession("room leave");
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnJoinedLobby))]
+    internal static class ModsNetManager_OnJoinedLobby_SteamTransferReset_Patch
+    {
+        private static void Prefix() => SteamSaveTransfer.ResetSession("joined lobby");
     }
 }

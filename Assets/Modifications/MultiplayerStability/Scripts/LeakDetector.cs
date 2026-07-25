@@ -37,6 +37,7 @@ using HarmonyLib;
 using Kingmaker;
 using Kingmaker.ElementsSystem.ContextData;
 using Kingmaker.EntitySystem.Persistence;
+using Kingmaker.Networking;
 using Kingmaker.Utility.Random;
 using Kingmaker.Utility.StatefulRandom;
 
@@ -49,7 +50,9 @@ namespace MultiplayerStability
         private static Dictionary<Rand, string> s_hashedStreams;
         private static int s_mainThreadId;
         private static readonly Dictionary<string, int> s_logCount = new Dictionary<string, int>();
-        private const int PerStreamCap = 6;   // enough to name a site a few times, then go quiet
+        private const int PerSiteCap = 6;
+        private const int MaxDistinctSites = 256;
+        private static bool s_siteTableCapLogged;
 
         internal static void Wire(Harmony harmony)
         {
@@ -63,53 +66,50 @@ namespace MultiplayerStability
                         s_hashedStreams[stream.Rand] = stream.Name;
                 }
                 var target = AccessTools.Method(typeof(Rand), nameof(Rand.Get));
+                if (target == null)
+                    throw new MissingMethodException(typeof(Rand).FullName, nameof(Rand.Get));
                 var prefix = new HarmonyMethod(AccessTools.Method(typeof(LeakDetector), nameof(OnRandGet)));
                 harmony.Patch(target, prefix: prefix);
-                MultiplayerStabilityMain.Log("[LeakDetector] Armed -- watching " + s_hashedStreams.Count
-                    + " hashed RNG streams for out-of-tick draws (log-only, proactive). If a hashed draw fires"
-                    + " outside a sim tick it will be named here BEFORE any desync.");
+                MultiplayerStabilityMain.LogNoThrow("[LeakDetector] Armed; watching " + s_hashedStreams.Count
+                    + " hashed RNG streams for candidate out-of-tick draws (log-only).");
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[LeakDetector][ERR] failed to arm, disabled: " + e);
+                MultiplayerStabilityMain.LogNoThrow("[LeakDetector][ERR] failed to arm, disabled: " + e);
                 s_hashedStreams = null;
             }
         }
 
-        // Prefix on Rand.Get(). HOT PATH: the first check (IsSimulationTick) is the near-universal early-out,
-        // so in-tick draws -- the overwhelming majority -- cost one bool read and return.
+        // Prefix on Rand.Get(). HOT PATH: after initialization and the main-thread check,
+        // IsSimulationTick is the near-universal early-out.
         private static void OnRandGet(Rand __instance)
         {
             try
             {
                 if (s_hashedStreams == null)
                     return;
+                if (Thread.CurrentThread.ManagedThreadId != s_mainThreadId)
+                    return;                                   // do not touch Game/Unity state from worker threads
                 var game = Game.Instance;
                 var rtc = game != null ? game.RealTimeController : null;
                 if (rtc == null || rtc.IsSimulationTick)
                     return;                                   // in a sim tick (or pre-game) = deterministic, fine
-                if (Thread.CurrentThread.ManagedThreadId != s_mainThreadId)
-                    return;                                   // off-thread (Pathfinding) -- do BEFORE any Unity singleton
                 if (ContextData<DisableStatefulRandomContext>.Current)
                     return;                                   // engine already diverts this to the non-hashed fallback
-                // Load/prepare/chargen initialization draws outside the tick but is DETERMINISTIC (both
-                // machines run the identical load), so it never forks -- the false-positive surface the audit
-                // predicted. Suppress the whole loading-SCREEN window (fade-in..shown..fade-out), not just the
-                // narrow area-swap work: v0.7.1 used only IsLoadingInProcess and the LoadingScreen/chargen/
-                // view draws leaked through the gap where the screen is up but the swap flag is momentarily off.
+                // Loading and character-setup callbacks produce a high volume of initialization draws while
+                // synchronized gameplay is not advancing. This detector excludes the whole loading-screen
+                // window because its purpose is to identify actionable runtime callers, not to prove loading
+                // symmetry. The exclusion is a diagnostic blind spot, not evidence that those draws are safe.
+                // Cover both the area-swap flag and the wider visible loading-screen interval.
                 var lp = LoadingProcess.Instance;
                 if (lp != null && (lp.IsLoadingInProcess || lp.IsLoadingScreenActive))
                     return;
                 string name;
                 if (!s_hashedStreams.TryGetValue(__instance, out name))
                     return;                                   // a non-hashed stream drawn out-of-tick = harmless
-                // Still out-of-tick outside any load window: classify by call path. Deterministic init/view
-                // lifecycle (entity prepare/postload, chargen doll rebuild, view attach, animation-set) is
-                // benign and stays silent; anything ELSE is a real ACTIVE-PLAY out-of-tick leak worth naming.
-                bool benign;
-                string site = ClassifyStack(out benign);
-                if (benign)
-                    return;
+                // A call path alone cannot prove that every peer executes the same lifecycle callback. Report
+                // view attach, animation setup, and similar paths as candidates instead of allow-listing them.
+                string site = DescribeStack();
                 ReportLeak(name, site);
             }
             catch (Exception)
@@ -120,32 +120,42 @@ namespace MultiplayerStability
 
         private static void ReportLeak(string stream, string site)
         {
+            string key = stream + "\n" + site;
             int n;
-            s_logCount.TryGetValue(stream, out n);
-            if (n >= PerStreamCap)
+            if (!s_logCount.TryGetValue(key, out n))
+            {
+                if (s_logCount.Count >= MaxDistinctSites)
+                {
+                    if (!s_siteTableCapLogged)
+                    {
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[LeakDetector] distinct call-site cap reached; new sites are omitted this session.");
+                        s_siteTableCapLogged = true;
+                    }
+                    return;
+                }
+                n = 0;
+            }
+            if (n >= PerSiteCap)
                 return;
-            s_logCount[stream] = n + 1;
-            string tail = (n + 1 == PerStreamCap) ? " (further out-of-tick draws on this stream suppressed)" : "";
-            MultiplayerStabilityMain.Log("[LeakDetector] OUT-OF-TICK hashed draw: stream '" + stream
-                + "' drawn during active play (not loading) -> latent desync. Site: " + site + tail);
+            s_logCount[key] = n + 1;
+            string tail = (n + 1 == PerSiteCap)
+                ? " (further records for this stream/site suppressed this session)"
+                : "";
+            MultiplayerStabilityMain.LogNoThrow("[LeakDetector] CANDIDATE out-of-tick hashed draw: stream='"
+                + stream + "' site=" + site + tail);
         }
 
-        // Init/view lifecycle methods that legitimately draw a hashed stream outside a tick and outside a
-        // load screen (unit views attaching as they stream into camera range, the main-character chargen doll
-        // rebuilding). These are deterministic on every client, so they are benign -- classify and stay silent.
-        private static readonly string[] BenignMarkers =
+        internal static void ResetSession()
         {
-            "PrepareOrPrePostLoad", "PrePostLoad", "PostLoad", "LoadRoutine",
-            "ChargenUnit", "RecreateUnit", "PrepareChargenUnits",
-            "SetupCharacterAvatar", "AttachToData", "OnAnimationSetChanged", "SetupCharacterView",
-            "LoadingScreen", "SetupLoadingArea",
-        };
+            s_logCount.Clear();
+            s_siteTableCapLogged = false;
+        }
 
-        // Walk the managed frames once: build a readable "who called" site string AND decide benign. Skip by
-        // NAME (not a fixed frame count) so Harmony glue frames between the prefix and Rand.Get don't shift it.
-        private static string ClassifyStack(out bool benign)
+        // Walk managed frames once and build a stable call-site key. Skip by name rather than frame count so
+        // Harmony glue frames between the prefix and Rand.Get do not shift the reported caller.
+        private static string DescribeStack()
         {
-            benign = false;
             try
             {
                 var st = new StackTrace(0, false);
@@ -158,16 +168,7 @@ namespace MultiplayerStability
                         continue;
                     var t = m.DeclaringType;
                     var tn = t != null ? t.Name : "?";
-                    for (int k = 0; k < BenignMarkers.Length; k++)
-                    {
-                        if (tn.IndexOf(BenignMarkers[k], StringComparison.Ordinal) >= 0
-                            || m.Name.IndexOf(BenignMarkers[k], StringComparison.Ordinal) >= 0)
-                        {
-                            benign = true;
-                            break;
-                        }
-                    }
-                    // skip our own plumbing and the RNG wrappers for the DISPLAY string (still scanned above)
+                    // Skip our own plumbing and RNG wrappers in the display key.
                     if (tn == "LeakDetector" || tn == "Rand" || tn == "StatefulRandom" || tn == "Uuid" || tn == "PFUuid")
                         continue;
                     if (shown < 6)
@@ -182,9 +183,20 @@ namespace MultiplayerStability
             }
             catch (Exception)
             {
-                benign = false;
                 return "(stack unavailable)";
             }
         }
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnJoinedLobby))]
+    internal static class ModsNetManager_OnJoinedLobby_LeakDetectorReset_Patch
+    {
+        private static void Prefix() => LeakDetector.ResetSession();
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnLeave))]
+    internal static class ModsNetManager_OnLeave_LeakDetectorReset_Patch
+    {
+        private static void Postfix() => LeakDetector.ResetSession();
     }
 }

@@ -25,7 +25,10 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using Kingmaker;
 using Kingmaker.Code.UI.MVVM.VM.ActionBar;
+using Kingmaker.EntitySystem.Entities;
+using PhotonPlayer = Photon.Realtime.Player;
 
 namespace MultiplayerStability
 {
@@ -49,13 +52,14 @@ namespace MultiplayerStability
                 if (unit == null)
                     return false;                                    // unitless slot: nothing to refresh, and
                                                                      // refreshing would NRE -- skip
-                if (unit.UniqueId != entityId)
+                if (RoleEntityId(unit) != entityId)
                     return false;                                    // event is about another entity: this
                                                                      // slot's state cannot have changed
                 if (!s_loggedActive)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[ActionBarFix] Active; slots refresh only for their normalized role owner.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[ActionBarFix] Active -- action-bar slots refresh only on their own unit's role events.");
                 }
                 return true;                                         // our unit's role changed: vanilla refresh
             }
@@ -63,6 +67,17 @@ namespace MultiplayerStability
             {
                 return true;                                         // fail-open: vanilla behaviour
             }
+        }
+
+        // Match PlayerRoleExtenstion.Can exactly. Starships use the main character's role key, and pets
+        // use their master's key; comparing every slot to unit.UniqueId wrongly discarded valid updates.
+        private static string RoleEntityId(BaseUnitEntity unit)
+        {
+            if (unit is StarshipEntity)
+                return Game.Instance.Player.MainCharacter.Id;
+            if (unit.IsPet && unit.Master != null)
+                return unit.Master.UniqueId;
+            return unit.UniqueId;
         }
     }
 
@@ -78,23 +93,17 @@ namespace MultiplayerStability
     {
         private static IEnumerable<MethodBase> TargetMethods()
         {
+            var targets = new List<MethodBase>();
             foreach (var name in new[] { "HandlePlayerEnteredRoom", "HandlePlayerLeftRoom" })
             {
-                MethodBase found = null;
-                foreach (var m in AccessTools.GetDeclaredMethods(typeof(ActionBarSlotVM)))
-                {
-                    if (m.Name == name && m.GetParameters().Length == 1
-                        && m.GetParameters()[0].ParameterType.Name == "Player")
-                    {
-                        found = m;
-                        break;
-                    }
-                }
-                if (found != null)
-                    yield return found;
-                else
-                    MultiplayerStabilityMain.Log("[ActionBarFix][ERR] ActionBarSlotVM." + name + "(Player) not found -- room-event path unguarded.");
+                MethodBase found = AccessTools.Method(
+                    typeof(ActionBarSlotVM), name, new[] { typeof(PhotonPlayer) });
+                if (found == null)
+                    throw new MissingMethodException(
+                        "ActionBarSlotVM." + name + "(Player) not found; room-event class inactive.");
+                targets.Add(found);
             }
+            return targets;
         }
 
         private static bool Prefix(ActionBarSlotVM __instance)

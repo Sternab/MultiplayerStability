@@ -5,20 +5,19 @@
 // read this state:
 //   1. AreaEffectEntity.ShouldUnitBeInside (aura membership and buff facts).
 //   2. UnitCombatJoinController.ShouldStartCombat (NPC combat entry).
-//   3. LOSGetter.GetBaseValue (buff apply/remove; keeps the deterministic HasLOS check).
+//   3. LOSGetter.GetBaseValue (buff apply/remove; keeps the separate HasLOS check).
 //   4. UnitMovementAgentBase.TickMovement (8x movement speed and heading snap).
 //   5. PartyAwarenessController.Tick (awareness rolls, XP, and trap triggers).
 //   6. RicochetHelper.GetPossibleRicochetTargets (candidate filtering).
 //
-// Fix: in multiplayer, every targeted site drops the client-local term. Fog readers treat units as NOT
-// fogged (get_IsInFogOfWar -> FogForMechanics); the LOS getter treats units as visible (get_IsVisibleFor
-// Player -> VisibleForMechanics, keeping the synced IsInGame term) so only deterministic gates remain.
-// Fog/render stays a presentation concept. Solo is untouched (both helpers defer to the real flag outside
-// MP). Transpiler call-swap on the getters, same pattern as ProjectileRngFix; patched at mod init (before
-// first gameplay JIT). Internal types (LOSGetter, RicochetHelper) are resolved by name.
+// Fix: each targeted site drops this one convicted client-local term. Fog readers treat units as not
+// fogged; the LOS getter treats in-game units as visible. This does not make each whole method
+// deterministic: trigger-fed CanBeInRange and area membership, View/ViewTransform awareness inputs,
+// movement-agent state, and ricochet candidate discovery remain separate risks. The patch's claim is
+// deliberately narrow: fog/visibility no longer adds another branch at these six sites.
 //
 // TurnController.SetTime uses a separate always-1x multiplayer policy in LocalTimeScaleFix.cs.
-// Exact parity is required because a mixed install evaluates different mechanics predicates.
+// The v0.9 compatibility decision enables these predicate changes only under exact-build parity.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -57,77 +56,74 @@ namespace MultiplayerStability
             var aware = AccessTools.Method(typeof(PartyAwarenessController), "Tick");
             var ricochetType = AccessTools.TypeByName("Kingmaker.RicochetHelper");
             var ricochet = ricochetType != null ? AccessTools.Method(ricochetType, "GetPossibleRicochetTargets") : null;
-            if (inside != null)
-                yield return inside;
-            else
-                MultiplayerStabilityMain.Log("[FogGate][ERR] AreaEffectEntity.ShouldUnitBeInside not found -- site unpatched.");
-            if (start != null)
-                yield return start;
-            else
-                MultiplayerStabilityMain.Log("[FogGate][ERR] UnitCombatJoinController.ShouldStartCombat not found -- site unpatched.");
-            if (los != null)
-                yield return los;
-            else
-                MultiplayerStabilityMain.Log("[FogGate][ERR] LOSGetter.GetBaseValue not found -- site unpatched.");
-            if (move != null)
-                yield return move;
-            else
-                MultiplayerStabilityMain.Log("[FogGate][ERR] UnitMovementAgentBase.TickMovement not found -- site unpatched.");
-            if (aware != null)
-                yield return aware;
-            else
-                MultiplayerStabilityMain.Log("[FogGate][ERR] PartyAwarenessController.Tick not found -- site unpatched.");
-            if (ricochet != null)
-                yield return ricochet;
-            else
-                MultiplayerStabilityMain.Log("[FogGate][ERR] RicochetHelper.GetPossibleRicochetTargets not found -- site unpatched.");
+            var targets = new[] { inside, start, los, move, aware, ricochet };
+            for (int i = 0; i < targets.Length; i++)
+            {
+                if (targets[i] == null)
+                    throw new MissingMethodException(
+                        "FogGate target discovery failed at index " + i + "; no sites were selected.");
+            }
+            return targets;
         }
 
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
         {
+            var code = new List<CodeInstruction>(instructions);
             var fogRepl = AccessTools.Method(typeof(FogGateFix), nameof(FogForMechanics));
             var visRepl = AccessTools.Method(typeof(FogGateFix), nameof(VisibleForMechanics));
-            int swapped = 0;
-            foreach (var ci in instructions)
+            bool expectsVisible = original.DeclaringType?.Name == "LOSGetter";
+            var expectedGetter = expectsVisible
+                ? AccessTools.PropertyGetter(typeof(Entity), nameof(Entity.IsVisibleForPlayer))
+                : AccessTools.PropertyGetter(typeof(Entity), nameof(Entity.IsInFogOfWar));
+            int expected = original.DeclaringType == typeof(UnitMovementAgentBase) ? 2 : 1;
+            var matches = new List<CodeInstruction>();
+            foreach (var ci in code)
             {
                 if ((ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call) && ci.operand is MethodInfo mi)
                 {
-                    // Both getters are instance bool(this) -> our static bool(Entity) has the same stack
-                    // transition (pop the entity ref, push bool), so a plain operand swap is valid.
-                    MethodInfo repl = null;
-                    if (mi.Name == "get_IsInFogOfWar")
-                        repl = fogRepl;
-                    else if (mi.Name == "get_IsVisibleForPlayer")
-                        repl = visRepl;
-                    if (repl != null)
-                    {
-                        yield return new CodeInstruction(OpCodes.Call, repl) { labels = ci.labels, blocks = ci.blocks };
-                        swapped++;
-                        continue;
-                    }
+                    if (mi == expectedGetter)
+                        matches.Add(ci);
                 }
-                yield return ci;
             }
-            MultiplayerStabilityMain.Log("[FogGate] " + original.DeclaringType?.Name + "." + original.Name
-                + ": " + swapped + " client-local visibility read(s) made multiplayer-safe"
-                + (swapped == 0 ? " -- PATTERN NOT FOUND, vanilla behaviour in effect" : "") + ".");
+
+            MethodInfo replacement = expectsVisible ? visRepl : fogRepl;
+            if (matches.Count != expected || expectedGetter == null || replacement == null)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[FogGate][ERR] " + original.DeclaringType?.Name + "." + original.Name
+                    + ": expected " + expected + " " + (expectsVisible ? "visibility" : "fog")
+                    + " getter(s), found " + matches.Count + "; method left unchanged.");
+                return code;
+            }
+
+            for (int i = 0; i < matches.Count; i++)
+            {
+                matches[i].opcode = OpCodes.Call;
+                matches[i].operand = replacement;
+            }
+            MultiplayerStabilityMain.LogNoThrow(
+                "[FogGate] " + original.DeclaringType?.Name + "." + original.Name
+                + ": replaced exactly " + matches.Count + " client-local getter(s).");
+            return code;
         }
 
         // In multiplayer every client answers "not fogged" so the mechanics gate opens identically
         // everywhere; solo defers to the real client-local flag (vanilla behaviour exactly).
         public static bool FogForMechanics(Entity entity)
         {
-            return !NetworkingManager.IsMultiplayer && entity.IsInFogOfWar;
+            return !MultiplayerCompatibility.SimulationFixesEnabled && entity.IsInFogOfWar;
         }
 
         // For an inclusion term (`&& unit.IsVisibleForPlayer`). IsVisibleForPlayer = !IsInFogOfWar && View
         // != null && View.IsVisible && IsInGame -- three client-local terms (fog + render) plus the SYNCED
         // IsInGame. In MP we drop only the client-local part and KEEP IsInGame (deterministic), so a
-        // not-in-game unit still can't pass; the HasLOS geometry check beside the term stays the real gate.
+        // not-in-game unit still can't pass; the HasLOS geometry check beside the term remains separate.
         // Solo defers to the real flag (vanilla).
         public static bool VisibleForMechanics(Entity entity)
         {
-            return NetworkingManager.IsMultiplayer ? entity.IsInGame : entity.IsVisibleForPlayer;
+            return MultiplayerCompatibility.SimulationFixesEnabled
+                ? entity.IsInGame
+                : entity.IsVisibleForPlayer;
         }
     }
 }

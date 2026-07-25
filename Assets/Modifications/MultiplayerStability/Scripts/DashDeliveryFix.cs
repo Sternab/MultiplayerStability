@@ -10,9 +10,10 @@
 // Macabre Dance applied EnemyEffect on a Necron on one machine and CoverEffect only on the other ->
 // permanent GlobalUuid count fork. Same hazard shape as ProjectileRngFix, for dashes.
 //
-// Fix: in multiplayer, mid-dash delivery is deferred. In-loop calls return while the movement agent is
-// still moving, and the unconditional post-movement call handles every precomputed target. Deliver sets
-// the caster's mechanics position to the dash endpoint (:313) before that call, so
+// Fix: in multiplayer, mid-dash delivery is deferred while the synchronized
+// BaseUnitEntity.State.IsCharging flag is true. Deliver clears that flag only after writing the caster's
+// mechanics position to the dash endpoint (:313-318), so the following unconditional call handles every
+// precomputed target from the correct position and cannot be skipped by a local movement-agent state.
 // range-checked main actions (Charge's melee attack!) resolve from the correct position. v1 of this fix
 // delivered everything on the FIRST poll instead and broke Charge: the attack ran while the caster was
 // still at the dash start, out of melee reach. Handling order is sorted by entity UniqueId (ordinal):
@@ -21,12 +22,12 @@
 // memory order = client-local). Residues accepted: effects land at dash END rather than mid-pass (visual
 // timing only), and the delivery tick can still skew by the dash duration (count-equal streams re-align,
 // but tick-skewed side effects are not guaranteed harmless: threshold-crossing accumulators like the
-// Tactician momentum remainder can latch a skew permanently). On
-// the engine's own 5s force-finish error path the agent may still report moving at the final call -- then
-// delivery is skipped symmetrically (a fizzle on an already-errored cast, not a fork).
-// Solo behaviour untouched. Both machines must run the mod (the standing install rule).
+// Tactician momentum remainder can latch a skew permanently). This is therefore a scoped mitigation for
+// candidate delivery and charge completion, not proof that every dash side effect is tick-identical.
+// Solo/unresolved/mixed sessions use vanilla.
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.Mechanics.Entities;
@@ -39,26 +40,54 @@ namespace MultiplayerStability
     [HarmonyPatch(typeof(AbilityCustomDirectMovement), "HandleNecessaryTargets")]
     internal static class AbilityCustomDirectMovement_HandleNecessaryTargets_Deterministic_Patch
     {
-        private delegate void HandleTargetDelegate(AbilityCustomDirectMovement self, AbilityExecutionContext context, MechanicEntity target);
-        private static readonly HandleTargetDelegate s_handleTarget = AccessTools.MethodDelegate<HandleTargetDelegate>(
-            AccessTools.Method(typeof(AbilityCustomDirectMovement), "HandleTarget"));
+        private delegate void HandleTargetDelegate(
+            AbilityCustomDirectMovement self,
+            AbilityExecutionContext context,
+            MechanicEntity target);
+        private static HandleTargetDelegate s_handleTarget;
 
         private static bool s_loggedActive;
         private static bool s_loggedError;
         private static readonly MechanicEntity[] s_empty = new MechanicEntity[0];
+
+        private static bool Prepare()
+        {
+            try
+            {
+                MethodInfo method = AccessTools.Method(
+                    typeof(AbilityCustomDirectMovement),
+                    "HandleTarget",
+                    new[] { typeof(AbilityExecutionContext), typeof(MechanicEntity) });
+                if (method == null)
+                {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DashFix][ERR] HandleTarget signature not found; patch inactive.");
+                    return false;
+                }
+                s_handleTarget = AccessTools.MethodDelegate<HandleTargetDelegate>(method);
+                return s_handleTarget != null;
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DashFix][ERR] HandleTarget binding failed; patch inactive: " + e.Message);
+                return false;
+            }
+        }
 
         private static bool Prefix(AbilityCustomDirectMovement __instance, AbilityExecutionContext context,
             MechanicEntity[] targets, HashSet<MechanicEntity> handledTargets, ref IEnumerable<MechanicEntity> __result)
         {
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
                     return true;
-                // Mid-dash (view agent still moving): defer -- the post-movement call delivers everything
-                // from the final position, where range-checked actions resolve correctly.
-                var casterUnit = context.Caster as AbstractUnitEntity;
-                var agent = casterUnit != null ? casterUnit.MaybeMovementAgent : null;
-                if (agent != null && agent.IsReallyMoving)
+                // The final call is after Deliver writes the endpoint and clears this hashed flag.
+                // This identifies the endpoint phase; it does not make the locally-driven completion tick equal.
+                var casterUnit = context.Caster as BaseUnitEntity;
+                if (casterUnit == null)
+                    return true;
+                if (casterUnit.State.IsCharging)
                 {
                     __result = s_empty;
                     return false;
@@ -78,16 +107,18 @@ namespace MultiplayerStability
                     }
                     catch (Exception e)
                     {
-                        MultiplayerStabilityMain.Log("[DashFix][ERR] target actions failed for " + target + ": " + e.Message);
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[DashFix][ERR] target actions failed for " + target + ": " + e.Message);
                     }
                     handledTargets.Add(target);
                 }
                 __result = pending;
                 if (!s_loggedActive && pending.Count > 0)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DashFix] Active; " + pending.Count
+                        + " deferred target(s) handled after synchronized charge completion.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[DashFix] Active -- dash-through delivery deterministic ("
-                        + pending.Count + " target(s) handled at once).");
                 }
                 return false;
             }
@@ -96,7 +127,8 @@ namespace MultiplayerStability
                 if (!s_loggedError)
                 {
                     s_loggedError = true;
-                    MultiplayerStabilityMain.Log("[DashFix][ERR] falling back to vanilla delivery: " + e);
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DashFix][ERR] falling back to vanilla delivery: " + e);
                 }
                 return true;
             }

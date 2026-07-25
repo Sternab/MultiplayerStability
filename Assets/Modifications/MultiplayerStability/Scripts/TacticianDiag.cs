@@ -1,88 +1,221 @@
-// Tactician momentum diagnostic. TacticalAdvantagePassive accumulates
-// a fractional remainder in data.MomentumThisCombat (+= evt.ResultDeltaValue * multiplier; -= 100 per
-// crossing) and adds TacticianTacticalAdvantageBuff on each 100-crossing, but Data.GetHash128 omits the
-// accumulator entirely, so a remainder divergence is invisible to desync detection until one peer crosses
-// 100 first and mints a one-sided hashed buff (captured @7816039: one peer alone created the buff).
-// The initial remainder difference is not yet identified. This component logs each momentum event, delta,
-// and post-event remainder so paired logs can locate the first difference. MomentumReachedTrigger,
-// HunterDodge, and ChangeVeilDamage have the same base-only hash pattern and remain audit items.
-// This component is log-only, subset-safe, and multiplayer-gated. Runtime data is read reflectively.
+// Tactician momentum diagnostic. TacticalAdvantagePassive accumulates a fractional remainder in
+// Data.MomentumThisCombat and awards a hashed buff each time the value crosses 100. Rogue Trader's
+// Data.GetHash128 omits the remainder, so different remainders are invisible until only one peer crosses
+// the threshold. This diagnostic records the existing value without calling RequestSavableData: observing
+// the component must not create or alter simulation state.
+//
+// Dark Heresy marks TacticalAdvantagePassive obsolete and removes its momentum rulebook handler. That is
+// useful evidence that the subsystem changed, but it is not a directly portable correction for this game.
+// This class remains diagnostic only, subset-safe, and gated to an active multiplayer session.
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using Kingmaker;
+using Kingmaker.EntitySystem;
 using Kingmaker.Networking;
 using Kingmaker.RuleSystem.Rules;
 using Kingmaker.UnitLogic.FactLogic;
 
 namespace MultiplayerStability
 {
-    [HarmonyPatch(typeof(TacticalAdvantagePassive), "OnEventDidTrigger", typeof(RulePerformMomentumChange))]
+    [HarmonyPatch(typeof(TacticalAdvantagePassive), "OnEventDidTrigger",
+        typeof(RulePerformMomentumChange))]
     internal static class TacticianDiag
     {
-        private static void Postfix(TacticalAdvantagePassive __instance, RulePerformMomentumChange evt)
+        private const int MaxRecordsPerSession = 4000;
+        private static readonly FieldInfo ComponentsDataField =
+            AccessTools.Field(typeof(EntityFact), "m_ComponentsData");
+        private static readonly Dictionary<string, int> Ordinals = new Dictionary<string, int>();
+        private static int s_ordinalTick = int.MinValue;
+        private static int s_records;
+        private static bool s_capLogged;
+
+        private static bool Prepare()
         {
+            if (ComponentsDataField != null)
+                return true;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[TacticianDiag][ERR] EntityFact.m_ComponentsData not found; diagnostic inactive.");
+            return false;
+        }
+
+        private struct EventState
+        {
+            internal bool Enabled;
+            internal int Tick;
+            internal int Sequence;
+            internal string Owner;
+            internal int? Before;
+        }
+
+        private static void Prefix(TacticalAdvantagePassive __instance, out EventState __state)
+        {
+            __state = default(EventState);
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
+                if (!NetworkingManager.IsMultiplayer || s_records >= MaxRecordsPerSession)
+                {
+                    LogCapOnce();
                     return;
-                int remainder = int.MinValue;
-                try
-                {
-                    // Component runtime data: resolve the Data instance reflectively and read the
-                    // hash-omitted accumulator.
-                    object data = null;
-                    var dataProp = AccessTools.Property(typeof(TacticalAdvantagePassive), "Data")
-                        ?? AccessTools.Property(typeof(TacticalAdvantagePassive).BaseType, "Data");
-                    if (dataProp != null)
-                        data = dataProp.GetValue(__instance);
-                    if (data == null)
-                    {
-                        var m = AccessTools.Method(typeof(TacticalAdvantagePassive), "RequestSavableData");
-                        if (m != null && m.IsGenericMethodDefinition == false)
-                            data = m.Invoke(__instance, null);
-                    }
-                    if (data != null)
-                    {
-                        var f = AccessTools.Field(data.GetType(), "MomentumThisCombat");
-                        if (f != null)
-                            remainder = (int)f.GetValue(data);
-                    }
                 }
-                catch (Exception) { }
-                object delta = null;
-                try
+
+                int tick = Game.Instance.RealTimeController.CurrentNetworkTick;
+                string owner = OwnerId(__instance);
+                if (tick != s_ordinalTick)
                 {
-                    delta = AccessTools.Property(typeof(RulePerformMomentumChange), "ResultDeltaValue")?.GetValue(evt)
-                        ?? AccessTools.Field(typeof(RulePerformMomentumChange), "ResultDeltaValue")?.GetValue(evt);
+                    s_ordinalTick = tick;
+                    Ordinals.Clear();
                 }
-                catch (Exception) { }
-                MultiplayerStabilityMain.Log("[TacticianDiag] momentum event owner="
-                    + OwnerId(__instance)
-                    + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
-                    + " delta=" + (delta ?? "?")
-                    + " remainderAfter=" + (remainder == int.MinValue ? "?" : remainder.ToString()));
+
+                int sequence;
+                Ordinals.TryGetValue(owner, out sequence);
+                Ordinals[owner] = sequence + 1;
+                __state = new EventState
+                {
+                    Enabled = true,
+                    Tick = tick,
+                    Sequence = sequence,
+                    Owner = owner,
+                    Before = ReadExistingRemainder(__instance)
+                };
             }
             catch (Exception)
             {
-                // log-only diagnostic: never interfere
+                // Diagnostic only.
             }
         }
 
-        private static string OwnerId(TacticalAdvantagePassive component)
+        private static void Postfix(
+            TacticalAdvantagePassive __instance,
+            RulePerformMomentumChange evt,
+            EventState __state)
+        {
+            if (!__state.Enabled)
+                return;
+            try
+            {
+                int? after = ReadExistingRemainder(__instance);
+                s_records++;
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[TacticianDiag] momentum tick=" + __state.Tick
+                    + " owner=" + __state.Owner
+                    + " seq=" + __state.Sequence
+                    + " delta=" + evt.ResultDeltaValue
+                    + " remainder=" + Format(__state.Before) + "->" + Format(after));
+            }
+            catch (Exception)
+            {
+                // Diagnostic only.
+            }
+        }
+
+        internal static int? ReadExistingRemainder(TacticalAdvantagePassive component)
         {
             try
             {
-                var owner = AccessTools.Property(typeof(TacticalAdvantagePassive), "Owner")
-                    ?? AccessTools.Property(typeof(TacticalAdvantagePassive).BaseType, "Owner");
-                var o = owner != null ? owner.GetValue(component) : null;
-                var id = o != null ? AccessTools.Property(o.GetType(), "UniqueId")?.GetValue(o) : null;
-                return id != null ? id.ToString() : "?";
+                var runtime = component.Runtime;
+                var fact = runtime?.Fact;
+                string componentName = runtime?.SourceBlueprintComponentName;
+                var dictionary = ComponentsDataField?.GetValue(fact) as IDictionary;
+                if (dictionary == null || string.IsNullOrEmpty(componentName)
+                    || !dictionary.Contains(componentName))
+                    return null;
+
+                var values = dictionary[componentName] as IEnumerable;
+                if (values == null)
+                    return null;
+                foreach (object value in values)
+                {
+                    var data = value as TacticalAdvantagePassive.Data;
+                    if (data != null)
+                        return data.MomentumThisCombat;
+                }
+            }
+            catch (Exception)
+            {
+            }
+            return null;
+        }
+
+        internal static string OwnerId(TacticalAdvantagePassive component)
+        {
+            try
+            {
+                object owner = component.Runtime?.Owner;
+                object id = owner != null
+                    ? AccessTools.Property(owner.GetType(), "UniqueId")?.GetValue(owner)
+                    : null;
+                return id?.ToString() ?? "?";
             }
             catch (Exception)
             {
                 return "?";
             }
         }
+
+        internal static void ResetSession()
+        {
+            Ordinals.Clear();
+            s_ordinalTick = int.MinValue;
+            s_records = 0;
+            s_capLogged = false;
+        }
+
+        private static string Format(int? value) => value.HasValue ? value.Value.ToString() : "missing";
+
+        private static void LogCapOnce()
+        {
+            if (s_records < MaxRecordsPerSession || s_capLogged)
+                return;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[TacticianDiag] record cap reached; further momentum events are omitted this session.");
+            s_capLogged = true;
+        }
+    }
+
+    [HarmonyPatch(typeof(TacticalAdvantagePassive), nameof(TacticalAdvantagePassive.HandleTurnBasedModeSwitched))]
+    internal static class TacticianDiag_Reset_Patch
+    {
+        private static void Prefix(
+            TacticalAdvantagePassive __instance,
+            bool isTurnBased,
+            out int? __state)
+        {
+            __state = null;
+            if (!NetworkingManager.IsMultiplayer || isTurnBased)
+                return;
+            __state = TacticianDiag.ReadExistingRemainder(__instance);
+        }
+
+        private static void Postfix(
+            TacticalAdvantagePassive __instance,
+            bool isTurnBased,
+            int? __state)
+        {
+            if (!NetworkingManager.IsMultiplayer || isTurnBased)
+                return;
+            int tick;
+            try
+            {
+                tick = Game.Instance.RealTimeController.CurrentNetworkTick;
+            }
+            catch (Exception)
+            {
+                tick = -1;
+            }
+            MultiplayerStabilityMain.LogNoThrow(
+                "[TacticianDiag] reset tick=" + tick
+                + " owner=" + TacticianDiag.OwnerId(__instance)
+                + " remainder=" + (__state.HasValue ? __state.Value.ToString() : "missing")
+                + "->" + (TacticianDiag.ReadExistingRemainder(__instance)?.ToString() ?? "missing"));
+        }
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnLeave))]
+    internal static class ModsNetManager_OnLeave_TacticianDiagReset_Patch
+    {
+        private static void Postfix() => TacticianDiag.ResetSession();
     }
 }

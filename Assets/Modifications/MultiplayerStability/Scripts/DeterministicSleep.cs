@@ -53,25 +53,26 @@ namespace MultiplayerStability
         // constant GameObject-activation storm (the "dreadful FPS" regression; the awake COUNT was never the
         // cost -- census showed awake 96 vs vanilla 128). As a replacing prefix, each unit gets exactly ONE
         // write of a stable value; the setters' change-guards then no-op in steady state. Vanilla's pass is
-        // replicated verbatim below (VanillaShouldSleep) for the ambient branch, so solo AND fail-open paths
-        // are byte-faithful: any exception -> return true -> the original untouched vanilla Tick runs.
+        // represented below (VanillaShouldSleep) for the ambient branch. Solo runs the original method.
+        // A compute-phase exception returns true before mutation, leaving the original Tick to run.
         private static bool Prefix()
         {
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
-                    return true;                                 // solo: vanilla Tick runs, we do nothing
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
+                    return true;                                 // solo/unresolved/mixed: vanilla Tick
                 // Census policy: full deterministic verdict while the party fights (synced flag, bounded
                 // counts) AND -- since the Channel-B audit -- for any unit that COULD join combat, even in
                 // peaceful play (combat starts are decided on the previous tick's census, so combat-capable
                 // units' sleep must be deterministic BEFORE the fight exists). Ambient units that can never
                 // join combat keep the vanilla camera verdict, preserving the voidship-bridge perf carve-out.
-                // Overrides that always hold: dying units resolve death on the same tick everywhere;
-                // cutscene-held-near-party and starships never sleep; corpses' reveal flag re-asserted
-                // deterministically below.
+                // Overrides: dying units are held awake so sleep does not gate death resolution;
+                // cutscene-held-near-party units and starships do not sleep; corpse reveal state is
+                // re-asserted deterministically below.
                 bool combatMode = Game.Instance.Player.IsInCombat;
                 int vanillaAwake = Game.Instance.State.AllAwakeUnits.Count;
                 int heldCount = 0;
+                float dt = Game.Instance.TimeController.DeltaTime;
                 s_awake.Clear();
                 s_pendingUnits.Clear();
                 s_pendingSleep.Clear();
@@ -141,34 +142,32 @@ namespace MultiplayerStability
                         s_awake.Add(unit);
                 }
                 Game.Instance.State.SetNewAwakeUnits(s_awake);
-                // Periodic census line (~60s): compares the active census with vanilla on this map.
-                // Keep it BEFORE
-                // the timer aging so the aging loop is the last work in the pass:
-                // with logging after it, a logger throw could rerun vanilla and double-age timers.
+                string censusMessage = null;
                 if (++s_censusTicks >= 1200 || !s_loggedActive)
                 {
                     s_censusTicks = 0;
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[DetSleep] census: awake " + s_awake.Count
+                    censusMessage = "[DetSleep] census: awake " + s_awake.Count
                         + " (prev-tick census " + vanillaAwake + "), cutsceneHeld " + heldCount
-                        + ", combatMode=" + combatMode + ".");
+                        + ", combatMode=" + combatMode + ".";
                 }
-                // Timer aging, the FINAL work in the pass (plain float ops -- nothing after this executes
-                // except the return): vanilla ages AwakeTimer inside ShouldBeSleeping, which every unit
+                // Timer aging is the final state mutation in the pass. Vanilla ages AwakeTimer inside
+                // ShouldBeSleeping, which every unit
                 // passed through -- our deterministic branch bypasses that method, so without this loop a
                 // Wake()'d combat-capable unit would keep a positive timer forever. Policy: any timer >= 0
                 // ages by the synced sim DeltaTime, for EVERY unit, uniformly. (Deliberate, documented
                 // divergence from vanilla, which freezes timers for units slept by its earlier clauses --
                 // suppressed/camera-frozen; uniform aging is deterministic and cannot strand a timer.)
-                // Everything that can throw precedes this loop and stages no timer mutations, so a failure
-                // can never double-age a timer when the fail-open path lets vanilla rerun.
-                float dt = Game.Instance.TimeController.DeltaTime;
+                // Compute failures precede this loop and cannot double-age a timer. AwakeTimer is an
+                // auto-property on this game build, so no exception is expected during the loop.
                 for (int i = 0; i < s_pendingUnits.Count; i++)
                 {
                     var unit = s_pendingUnits[i];
                     if (unit.AwakeTimer >= 0f)
                         unit.AwakeTimer -= dt;
                 }
+                if (censusMessage != null)
+                    MultiplayerStabilityMain.LogNoThrow(censusMessage);
                 return false;                                    // census applied -- skip vanilla's pass
             }
             catch (Exception e)
@@ -181,8 +180,10 @@ namespace MultiplayerStability
                     // aging is staged last in apply) -- and vanilla's own Tick then runs normally (return
                     // true). An apply-pass failure could leave partial flag writes before vanilla re-runs
                     // -- never observed; the apply path is list ops and change-guarded property sets, and
-                    // timer aging sits after every throwing operation, so timers can never double-age.
-                    MultiplayerStabilityMain.Log("[DetSleep][ERR] census rebuild failed, vanilla pass runs instead: " + e);
+                    // timer aging follows the known throwing operations. An unexpected failure inside the
+                    // timer loop could still leave a partially aged prefix before vanilla runs.
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DetSleep][ERR] census rebuild failed, vanilla pass runs instead: " + e);
                 }
                 return true;                                     // fail-open: vanilla Tick executes
             }
@@ -230,6 +231,12 @@ namespace MultiplayerStability
             // exposure. Order matches vanilla: Suppressed sleep wins over Sleepless.
             if (unit.Sleepless)
                 return false;
+            // Wake() is a simulation-side lifecycle contract, not a camera preference. Preserve vanilla's
+            // pre-decrement semantics: a non-negative timer keeps the unit awake for this tick, and the
+            // staged apply pass ages it once afterward. Dark Heresy centralizes the same invariant by
+            // masking sleep while the timer is active.
+            if (unit.AwakeTimer >= 0f)
+                return false;
             // Everything else sleeps by synced DISTANCE alone (replaces the camera/fog test for ALL unit
             // kinds). Deliberately NO Commands.Empty gate (the Thassera FPS regression, v0.8.1): city crowds
             // walk routes, so their command queue is never empty -- with the gate they could NEVER sleep and
@@ -265,9 +272,9 @@ namespace MultiplayerStability
             return false;
         }
 
-        // "Could this unit enter combat?" -- the engine's own join predicate (public static), so the set of
-        // units whose sleep verdict must be deterministic is exactly the set the join scan can act on, and
-        // it self-maintains if the engine's rules change. All its inputs are synced state.
+        // "Could this unit enter combat?" This uses the engine's current public join predicate so the
+        // deterministic census covers the same candidate set on game build 1.6.1.514. The predicate and
+        // its inputs must be re-audited after an engine update.
         private static bool IsCombatCapable(AbstractUnitEntity unit)
         {
             var baseUnit = unit as BaseUnitEntity;
@@ -292,7 +299,7 @@ namespace MultiplayerStability
             __state = null;
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
                     return;
                 var view = __instance.Entity as UnitEntityView;
                 var data = view != null ? view.EntityData : null;
@@ -301,8 +308,10 @@ namespace MultiplayerStability
                     __state = data.AwakeTimer;
                     if (!s_loggedActive)
                     {
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[DetSleep] FaderWakeCancel active; fog-dissolve fades no longer write "
+                            + "the simulation awake timer.");
                         s_loggedActive = true;
-                        MultiplayerStabilityMain.Log("[DetSleep] FaderWakeCancel active -- fog-dissolve fades no longer write the sim awake timer in multiplayer.");
                     }
                 }
             }
@@ -311,10 +320,13 @@ namespace MultiplayerStability
             }
         }
 
-        private static void Postfix(EntityFader __instance, float? __state)
+        private static Exception Finalizer(
+            EntityFader __instance,
+            float? __state,
+            Exception __exception)
         {
             if (__state == null)
-                return;
+                return __exception;
             try
             {
                 var view = __instance.Entity as UnitEntityView;
@@ -325,6 +337,7 @@ namespace MultiplayerStability
             catch (Exception)
             {
             }
+            return __exception;
         }
     }
 }

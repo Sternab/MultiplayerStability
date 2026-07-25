@@ -46,7 +46,8 @@ namespace MultiplayerStability
 {
     // Guard A: the two UI-preview getters hold DisableStatefulRandomContext for their whole body in MP, so
     // their internal draws (CharacterSelection.SelectUnit Random pick; any incidental preview-rule work)
-    // divert to the non-hashed fallback on every machine identically -- semantic, not timing-based.
+    // avoid advancing hashed state. Preview values can remain client-local; the synchronized selection path
+    // is untouched.
     [HarmonyPatch]
     internal static class BlueprintAnswer_PreviewGetters_NoHashedDraw_Patch
     {
@@ -54,14 +55,16 @@ namespace MultiplayerStability
 
         private static IEnumerable<MethodBase> TargetMethods()
         {
+            var targets = new List<MethodBase>();
             foreach (var prop in new[] { "SkillChecks", "SkillChecksDC" })
             {
                 var getter = AccessTools.PropertyGetter(typeof(BlueprintAnswer), prop);
-                if (getter != null)
-                    yield return getter;
-                else
-                    MultiplayerStabilityMain.Log("[DialogRng][ERR] BlueprintAnswer." + prop + " getter not found -- preview path unguarded.");
+                if (getter == null)
+                    throw new MissingMethodException(
+                        "BlueprintAnswer." + prop + " getter not found; preview-getter class inactive.");
+                targets.Add(getter);
             }
+            return targets;
         }
 
         private static void Prefix(out IDisposable __state)
@@ -69,18 +72,21 @@ namespace MultiplayerStability
             __state = null;
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
                     return;
                 __state = ContextData<DisableStatefulRandomContext>.Request();
                 if (!s_loggedActive)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DialogRng] Preview getter guard active under exact-build compatibility.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[DialogRng] Preview guard active -- answer skill-check previews no longer advance hashed streams in multiplayer.");
                 }
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                // fail-open: no context held -> vanilla behaviour
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DialogRng][ERR] preview RNG context request failed; vanilla path remains: "
+                    + e.Message);
             }
         }
 
@@ -92,7 +98,8 @@ namespace MultiplayerStability
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[DialogRng][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DialogRng][ERR] RNG context dispose failed; context may remain active: " + e);
             }
             return __exception;
         }
@@ -113,18 +120,21 @@ namespace MultiplayerStability
             __state = null;
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
                     return;
                 __state = ContextData<DisableStatefulRandomContext>.Request();
                 if (!s_loggedActive)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DialogRng] Answer-tree inspection guard active under exact-build compatibility.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[DialogRng] Inspection guard active -- answer-tree inspection (HasNextUnselectedAnswers) no longer advances hashed streams in multiplayer.");
                 }
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                // fail-open: no context held -> vanilla behaviour
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DialogRng][ERR] inspection RNG context request failed; vanilla path remains: "
+                    + e.Message);
             }
         }
 
@@ -136,7 +146,8 @@ namespace MultiplayerStability
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[DialogRng][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DialogRng][ERR] RNG context dispose failed; context may remain active: " + e);
             }
             return __exception;
         }

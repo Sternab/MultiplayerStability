@@ -42,10 +42,30 @@ namespace MultiplayerStability
             // Use the explicit signature to avoid ambiguous overload resolution.
             var handle = AccessTools.Method(typeof(WeatherController), "HandlePartyCombatStateChanged",
                 new[] { typeof(bool) });
-            if (handle != null)
+            var visualType = AccessTools.TypeByName(
+                "Owlcat.Runtime.Visual.Effects.WeatherSystem.VFXWeatherSystem");
+            s_profileOverridenProp = visualType != null
+                ? AccessTools.Property(visualType, "IsProfileOverriden")
+                : null;
+            s_vfxInstanceProp = visualType != null
+                ? AccessTools.Property(visualType, "Instance")
+                : null;
+
+            if (handle != null
+                && s_weatherCtrl != null
+                && s_windCtrl != null
+                && s_targetInclemency != null
+                && s_profileOverridenProp != null
+                && s_vfxInstanceProp != null)
+            {
                 yield return handle;
+            }
             else
-                MultiplayerStabilityMain.Log("[WeatherDiag][ERR] WeatherController.HandlePartyCombatStateChanged(bool) not found -- diagnostic inactive.");
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[WeatherDiag][ERR] combat-exit target or required reflected member not found; "
+                    + "combat-exit snapshot inactive.");
+            }
         }
 
         private static void Prefix(WeatherController __instance, bool inCombat)
@@ -96,7 +116,7 @@ namespace MultiplayerStability
                 }
                 catch (Exception) { sb.Append(" currentEffect=?"); }
                 sb.Append(" Weather=").Append(Fingerprint(PFStatefulRandom.Weather));
-                MultiplayerStabilityMain.Log(sb.ToString());
+                MultiplayerStabilityMain.LogNoThrow(sb.ToString());
             }
             catch (Exception)
             {
@@ -152,11 +172,12 @@ namespace MultiplayerStability
             try
             {
                 var st = rand.State;
-                return (st.x ^ st.y ^ st.z ^ st.w).ToString("X8");
+                return st.x.ToString("X8") + "/" + st.y.ToString("X8") + "/"
+                    + st.z.ToString("X8") + "/" + st.w.ToString("X8");
             }
             catch (Exception)
             {
-                return "????????";
+                return "????????/????????/????????/????????";
             }
         }
     }
@@ -187,9 +208,18 @@ namespace MultiplayerStability
                 }
             }
             if (found != null)
-                yield return found;
+            {
+                if (s_weatherData != null)
+                    yield return found;
+                else
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[WeatherDiag][ERR] InclemencyController.m_WeatherData not found; "
+                        + "draw-site diagnostic inactive.");
+            }
             else
-                MultiplayerStabilityMain.Log("[WeatherDiag][ERR] InclemencyController.SetNewInclemency(Inclemency,bool,float?) not found -- draw-site diagnostic inactive.");
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[WeatherDiag][ERR] InclemencyController.SetNewInclemency"
+                    + "(Inclemency,bool,float?) not found; draw-site diagnostic inactive.");
         }
 
         private static readonly FieldInfo s_weatherData =
@@ -200,12 +230,16 @@ namespace MultiplayerStability
             __state = WeatherCombatExitDiag.Fingerprint(PFStatefulRandom.Weather);
         }
 
-        private static void Postfix(InclemencyController __instance, object[] __args, string __state)
+        private static Exception Finalizer(
+            InclemencyController __instance,
+            object[] __args,
+            string __state,
+            Exception __exception)
         {
             try
             {
                 if (!NetworkingManager.IsMultiplayer)
-                    return;
+                    return __exception;
                 string role = "?";
                 try
                 {
@@ -214,16 +248,20 @@ namespace MultiplayerStability
                     else if (ReferenceEquals(data, Game.Instance.Player.Wind)) role = "wind";
                 }
                 catch (Exception) { }
-                MultiplayerStabilityMain.Log("[WeatherDiag] SetNewInclemency ctrl=" + role
+                MultiplayerStabilityMain.LogNoThrow("[WeatherDiag] SetNewInclemency ctrl=" + role
                     + " inclemency=" + (__args != null && __args.Length > 0 && __args[0] != null ? __args[0].ToString() : "?")
                     + " instantly=" + (__args != null && __args.Length > 1 ? __args[1] : "?")
+                    + " changeSpeed=" + (__args != null && __args.Length > 2
+                        ? (__args[2]?.ToString() ?? "null") : "?")
                     + " tick=" + Game.Instance.RealTimeController.CurrentNetworkTick
-                    + " Weather=" + __state + "->" + WeatherCombatExitDiag.Fingerprint(PFStatefulRandom.Weather));
+                    + " Weather=" + __state + "->" + WeatherCombatExitDiag.Fingerprint(PFStatefulRandom.Weather)
+                    + " outcome=" + (__exception == null ? "ok" : __exception.GetType().Name));
             }
             catch (Exception)
             {
                 // log-only diagnostic: never interfere
             }
+            return __exception;
         }
     }
 }

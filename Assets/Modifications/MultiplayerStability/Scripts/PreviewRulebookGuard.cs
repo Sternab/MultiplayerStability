@@ -47,15 +47,18 @@ namespace MultiplayerStability
                     new[] { typeof(IGlobalRulebookSubscriber), typeof(ISubscriptionProxy) });
                 if (target == null)
                 {
-                    MultiplayerStabilityMain.Log("[GhostRulebookGuard][ERR] RulebookEventBus.Subscribe(global) not found -- disabled.");
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[GhostRulebookGuard][ERR] RulebookEventBus.Subscribe(global) not found; disabled.");
                     return;
                 }
                 harmony.Patch(target, prefix: new HarmonyMethod(AccessTools.Method(typeof(PreviewRulebookGuard), nameof(Prefix))));
-                MultiplayerStabilityMain.Log("[GhostRulebookGuard] Armed -- preview-owned global rulebook subscriptions are blocked in multiplayer (registration-time).");
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[GhostRulebookGuard] Armed; runtime blocking requires exact-build compatibility.");
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[GhostRulebookGuard][ERR] failed to arm, disabled: " + e);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[GhostRulebookGuard][ERR] failed to arm, disabled: " + e);
             }
         }
 
@@ -64,27 +67,33 @@ namespace MultiplayerStability
         // handler); true == register as vanilla.
         private static bool Prefix(IGlobalRulebookSubscriber subscriber, ISubscriptionProxy proxy)
         {
+            bool previewOwned;
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
-                    return true;                                   // solo: byte-identical vanilla
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
+                    return true;                                   // solo/unresolved/mixed: vanilla
                 var entity = proxy != null
                     ? proxy.GetSubscribingEntity()
                     : (subscriber as IEntitySubscriber)?.GetSubscribingEntity();
                 var owner = entity as AbstractUnitEntity;
-                if (owner != null && owner.IsPreviewUnit)
-                {
-                    if (++s_skipped <= SkipLogCap)
-                        MultiplayerStabilityMain.Log("[GhostRulebookGuard] skipped preview-owned global rulebook subscription #"
-                            + s_skipped + (s_skipped == SkipLogCap ? " (further skips silent)" : ""));
-                    return false;                                  // ghost stays out of the global rulebook
-                }
+                previewOwned = owner != null && owner.IsPreviewUnit;
             }
             catch
             {
                 // any failure to resolve the owner -> register normally (never block a real unit)
+                return true;
             }
-            return true;
+            if (!previewOwned)
+                return true;
+
+            int skipped = ++s_skipped;
+            if (skipped <= SkipLogCap)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[GhostRulebookGuard] skipped preview-owned global subscription #" + skipped
+                    + (skipped == SkipLogCap ? " (further skips silent)" : ""));
+            }
+            return false;                                          // logging cannot re-enable registration
         }
     }
 }

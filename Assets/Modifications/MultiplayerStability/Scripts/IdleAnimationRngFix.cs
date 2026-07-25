@@ -28,8 +28,7 @@
 // is symmetric and harmless unless proven otherwise). Do not widen this patch to them without a capture.
 //
 // Exact parity required: a modded-vs-vanilla pair would advance Animation3 on one machine only.
-// Standard manual mod parity applies. Fail-open per site: pattern
-// not found -> original IL unchanged + loud log.
+// The session latch leaves the helper on its vanilla path unless every peer advertises this exact build.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -70,33 +69,52 @@ namespace MultiplayerStability
             };
             for (int i = 0; i < sites.Length; i++)
             {
-                if (sites[i] != null)
-                    yield return sites[i];
-                else
-                    MultiplayerStabilityMain.Log("[IdleRng][ERR] " + labels[i] + " not found -- site unpatched.");
+                if (sites[i] == null)
+                    throw new MissingMethodException(
+                        labels[i] + " not found; idle RNG patch class inactive.");
             }
+            return sites;
         }
 
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
         {
+            var code = new List<CodeInstruction>(instructions);
             var replacement = AccessTools.Method(typeof(IdleAnimationRngFix), nameof(IdleRng));
-            int swapped = 0;
-            foreach (var ci in instructions)
+            var matches = new List<CodeInstruction>();
+            foreach (var ci in code)
             {
                 if ((ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call)
                     && ci.operand is MethodInfo mi && mi.Name == "get_StatefulRandom"
                     && mi.DeclaringType == typeof(AnimationManager))
-                {
-                    // Same stack transition: consumes the AnimationManager ref, pushes StatefulRandom.
-                    yield return new CodeInstruction(OpCodes.Call, replacement) { labels = ci.labels, blocks = ci.blocks };
-                    swapped++;
-                    continue;
-                }
-                yield return ci;
+                    matches.Add(ci);
             }
-            MultiplayerStabilityMain.Log("[IdleRng] " + original.DeclaringType?.Name + "." + original.Name
-                + ": " + swapped + " idle draw(s) rerouted off the hashed Animation3 stream in multiplayer"
-                + (swapped == 0 ? " -- PATTERN NOT FOUND, vanilla behaviour in effect" : "") + ".");
+            int expected = ExpectedCount(original);
+            if (matches.Count != expected || replacement == null)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[IdleRng][ERR] " + original.DeclaringType?.Name + "." + original.Name
+                    + ": expected " + expected + " StatefulRandom getter(s), found " + matches.Count
+                    + "; method left unchanged.");
+                return code;
+            }
+            for (int i = 0; i < matches.Count; i++)
+            {
+                matches[i].opcode = OpCodes.Call;
+                matches[i].operand = replacement;
+            }
+            MultiplayerStabilityMain.LogNoThrow(
+                "[IdleRng] " + original.DeclaringType?.Name + "." + original.Name
+                + ": replaced exactly " + matches.Count + " idle RNG getter(s).");
+            return code;
+        }
+
+        private static int ExpectedCount(MethodBase original)
+        {
+            if (original.DeclaringType == typeof(UnitAnimationManager))
+                return original.Name == "TickIdleVariants" ? 5 : 1;
+            if (original.DeclaringType == typeof(UnitAnimationActionVariantIdle))
+                return 4;
+            return 1;
         }
 
         // MP: the engine's own designated NON-hashed idle stream (excluded from the serialized set) --
@@ -104,7 +122,9 @@ namespace MultiplayerStability
         // exactly (including its doll-room switch).
         public static StatefulRandom IdleRng(AnimationManager manager)
         {
-            return NetworkingManager.IsMultiplayer ? PFStatefulRandom.Visuals.AnimationIdle : manager.StatefulRandom;
+            return MultiplayerCompatibility.SimulationFixesEnabled
+                ? PFStatefulRandom.Visuals.AnimationIdle
+                : manager.StatefulRandom;
         }
     }
 }

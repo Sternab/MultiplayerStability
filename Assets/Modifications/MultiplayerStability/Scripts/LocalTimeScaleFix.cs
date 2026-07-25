@@ -35,24 +35,30 @@ namespace MultiplayerStability
     {
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
+            var code = new List<CodeInstruction>(instructions);
             var replacement = AccessTools.Method(typeof(TurnController_SetTime_DeterministicAiSpeed_Patch),
                 nameof(HiddenForAiTurnSpeed));
-            int swapped = 0;
-            foreach (var ci in instructions)
+            var fogGetter = AccessTools.PropertyGetter(
+                typeof(Entity), nameof(Entity.IsInFogOfWar));
+            var matches = new List<CodeInstruction>();
+            foreach (var ci in code)
             {
                 if ((ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call)
-                    && ci.operand is MethodInfo mi && mi.Name == "get_IsInFogOfWar")
-                {
-                    // Same stack transition: consumes the entity ref, pushes bool.
-                    yield return new CodeInstruction(OpCodes.Call, replacement) { labels = ci.labels, blocks = ci.blocks };
-                    swapped++;
-                    continue;
-                }
-                yield return ci;
+                    && ci.operand is MethodInfo mi && mi == fogGetter)
+                    matches.Add(ci);
             }
-            MultiplayerStabilityMain.Log("[TimeScaleFix] TurnController.SetTime: " + swapped
-                + " fog read(s) made deterministic"
-                + (swapped == 0 ? " -- PATTERN NOT FOUND, vanilla behaviour in effect" : "") + ".");
+            if (matches.Count != 1 || fogGetter == null || replacement == null)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[TimeScaleFix][ERR] TurnController.SetTime expected one fog getter, found "
+                    + matches.Count + "; method left unchanged.");
+                return code;
+            }
+            matches[0].opcode = OpCodes.Call;
+            matches[0].operand = replacement;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[TimeScaleFix] TurnController.SetTime replaced exactly one fog getter.");
+            return code;
         }
 
         // MP: NEVER fast-forward -- the conservative always-1x policy (v0.8.15). The v0.8.1 version
@@ -64,7 +70,7 @@ namespace MultiplayerStability
         // Solo: the real client-local fog flag (vanilla exactly).
         public static bool HiddenForAiTurnSpeed(Entity entity)
         {
-            return !NetworkingManager.IsMultiplayer && entity.IsInFogOfWar;
+            return !MultiplayerCompatibility.SimulationFixesEnabled && entity.IsInFogOfWar;
         }
     }
 
@@ -73,27 +79,31 @@ namespace MultiplayerStability
     {
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
+            var code = new List<CodeInstruction>(instructions);
             var replacement = AccessTools.Method(typeof(UnpauseController_Tick_NoLocalSlowMo_Patch), nameof(SlowMoScale));
-            int swapped = 0;
-            foreach (var ci in instructions)
+            var matches = new List<CodeInstruction>();
+            foreach (var ci in code)
             {
                 if (ci.opcode == OpCodes.Ldc_R4 && ci.operand is float f && f == 0.6f)
-                {
-                    // Same stack transition: pushes a float.
-                    yield return new CodeInstruction(OpCodes.Call, replacement) { labels = ci.labels, blocks = ci.blocks };
-                    swapped++;
-                    continue;
-                }
-                yield return ci;
+                    matches.Add(ci);
             }
-            MultiplayerStabilityMain.Log("[TimeScaleFix] UnpauseController.Tick: " + swapped
-                + " local slow-mo constant(s) neutralized in multiplayer"
-                + (swapped == 0 ? " -- PATTERN NOT FOUND, vanilla behaviour in effect" : "") + ".");
+            if (matches.Count != 1 || replacement == null)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[TimeScaleFix][ERR] UnpauseController.Tick expected one 0.6f constant, found "
+                    + matches.Count + "; method left unchanged.");
+                return code;
+            }
+            matches[0].opcode = OpCodes.Call;
+            matches[0].operand = replacement;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[TimeScaleFix] UnpauseController.Tick replaced exactly one local slow-motion constant.");
+            return code;
         }
 
         public static float SlowMoScale()
         {
-            return NetworkingManager.IsMultiplayer ? 1f : 0.6f;
+            return MultiplayerCompatibility.SimulationFixesEnabled ? 1f : 0.6f;
         }
     }
 }

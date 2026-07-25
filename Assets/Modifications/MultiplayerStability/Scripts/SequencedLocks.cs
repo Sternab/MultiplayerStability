@@ -1,15 +1,14 @@
 // Sequenced co-op loading barriers.
 //
-// The loading path reuses NetLockPointId.LoadingProcess for several barriers in one area transition.
-// Announcements carry no sequence number. If a fast peer announces the next barrier while another peer
-// is still on the previous one, the announcement can be consumed by the previous accumulator. The slow
-// peer then waits for a signal that has already been consumed.
+// Rogue Trader reuses the same one-byte lock point for several barriers in an area transition. A fast
+// peer can announce the next occurrence while a slow peer still owns the previous accumulator. This
+// protocol adds an epoch-local ordinal so the announcements cannot be consumed by the wrong barrier.
 //
-// When every peer has the mod, code-8 announcements include a per-session barrier ordinal and signals
-// are accumulated by ordinal. The baseline resets on save upload/download and room leave.
-//
-// If a barrier exceeds the timeout and every remote peer has reported a higher ordinal, it is treated as
-// ordinal misalignment and force-completed. A slow peer that has not advanced does not satisfy this test.
+// The protocol runs only under the session-latched exact-build gate. Reach messages are idempotent and
+// retransmitted once per second. A malformed/mixed packet, internal failure, or 30-second timeout sends
+// an explicit epoch ABORT. Peers that receive it clear sequenced state and resume the untouched one-byte
+// vanilla protocol. Delivery still depends on Photon's reliable message path; this is coordinated fallback,
+// not a distributed-consensus guarantee.
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -20,187 +19,261 @@ namespace MultiplayerStability
 {
     internal static class SequencedLocks
     {
-        private const float MisalignFallbackSeconds = 15f;
+        private const uint Magic = 0x4B4C534D; // "MSLK" in little-endian byte order
+        private const byte ProtocolVersion = 1;
+        private const byte KindReach = 1;
+        private const byte KindAbort = 2;
+        private const int FrameSize = 11;
+        private const float RetrySeconds = 1f;
+        private const float AbortSeconds = 30f;
 
-        // key = (pointId << 32) | ordinal  ->  players who have reached that (point, ordinal) barrier
-        private static readonly Dictionary<long, NetPlayerGroup> s_Groups = new Dictionary<long, NetPlayerGroup>();
-        private static readonly Dictionary<byte, int> s_NextSeq = new Dictionary<byte, int>();   // next ordinal to hand out per point
-        private static readonly Dictionary<byte, int> s_ActiveSeq = new Dictionary<byte, int>();  // ordinal of the in-progress barrier per point
-        private static readonly Dictionary<byte, float> s_ActiveSince = new Dictionary<byte, float>();
+        private static readonly Dictionary<long, NetPlayerGroup> s_groups =
+            new Dictionary<long, NetPlayerGroup>();
+        private static readonly Dictionary<byte, int> s_nextSeq =
+            new Dictionary<byte, int>();
+        private static readonly Dictionary<byte, int> s_activeSeq =
+            new Dictionary<byte, int>();
+        private static readonly Dictionary<byte, float> s_activeSince =
+            new Dictionary<byte, float>();
+        private static readonly Dictionary<byte, float> s_lastAnnounce =
+            new Dictionary<byte, float>();
 
-        private static long Key(byte pt, int seq) => ((long)pt << 32) | (uint)seq;
+        private static bool s_aborted;
+        private static bool s_loggedActive;
 
-        internal static bool Active()
-            => NetworkingManager.IsMultiplayer && AllPlayersModded();
+        private static long Key(byte point, int sequence)
+            => ((long)point << 32) | (uint)sequence;
 
-        // Returns true and sets result when this replaces vanilla LockNetManager.Lock; false = run vanilla.
         internal static bool TryLock(NetLockPointId pointId, out bool result)
         {
             result = false;
-            if (!Active())
+            if (!MultiplayerCompatibility.ProtocolsEnabled || s_aborted)
                 return false;
+
+            byte point = (byte)pointId;
             try
             {
-                byte pt = (byte)pointId;
-                int seq;
-                if (!s_ActiveSeq.TryGetValue(pt, out seq))
+                if (!s_activeSeq.TryGetValue(point, out int sequence))
                 {
-                    seq = s_NextSeq.TryGetValue(pt, out var n) ? n : 0;
-                    s_NextSeq[pt] = seq + 1;
-                    s_ActiveSeq[pt] = seq;
-                    s_ActiveSince[pt] = Time.realtimeSinceStartup;
-                    long k0 = Key(pt, seq);
-                    s_Groups[k0] = Get(k0).Add(NetworkingManager.LocalNetPlayer);
-                    Announce(pt, seq);
-                    MultiplayerStabilityMain.Log("[SeqLock] barrier #" + seq + " (point " + pointId + ") reached; announced.");
+                    sequence = s_nextSeq.TryGetValue(point, out int next) ? next : 0;
+                    s_nextSeq[point] = sequence + 1;
+                    s_activeSeq[point] = sequence;
+                    s_activeSince[point] = Time.realtimeSinceStartup;
+                    s_lastAnnounce[point] = float.NegativeInfinity;
+                    long initialKey = Key(point, sequence);
+                    s_groups[initialKey] = Get(initialKey).Add(NetworkingManager.LocalNetPlayer);
+                    LogActiveOnce();
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[SeqLock] Reached barrier #" + sequence + " (point " + pointId + ").");
                 }
 
-                long k = Key(pt, seq);
-                var ready = NetworkingManager.PlayersReadyMask;
-                if (Get(k).Contains(ready))
+                float now = Time.realtimeSinceStartup;
+                if (now - s_lastAnnounce[point] >= RetrySeconds)
                 {
-                    Complete(pt, seq, "all players present");
+                    Announce(KindReach, point, sequence);
+                    s_lastAnnounce[point] = now;
+                }
+
+                long key = Key(point, sequence);
+                if (Get(key).Contains(NetworkingManager.PlayersReadyMask))
+                {
+                    Complete(point, sequence);
                     result = true;
                     return true;
                 }
 
-                if (Time.realtimeSinceStartup - s_ActiveSince[pt] > MisalignFallbackSeconds
-                    && EveryRemotePlayerPastOrdinal(pt, seq))
+                if (now - s_activeSince[point] >= AbortSeconds)
                 {
-                    MultiplayerStabilityMain.Log("[SeqLock][WARN] barrier #" + seq + " stuck " + (int)MisalignFallbackSeconds
-                        + "s with peers already past it -> ordinal misalignment; force-completing (resync if state looks off).");
-                    Complete(pt, seq, "misalignment fallback");
-                    result = true;
-                    return true;
+                    AbortEpoch(
+                        "barrier #" + sequence + " point " + pointId + " exceeded "
+                        + (int)AbortSeconds + " seconds",
+                        true);
+                    return false;
                 }
-                return true;   // still waiting -- consumed vanilla Lock, result stays false
+
+                return true;
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[SeqLock][ERR] TryLock, falling back to vanilla: " + e);
+                AbortEpoch("TryLock failed: " + e.Message, true);
                 return false;
             }
         }
 
         internal static bool TryOnReceived(NetPlayer player, ReadOnlySpan<byte> bytes)
         {
-            if (!Active())
+            bool ours = HasMagic(bytes);
+            if (!MultiplayerCompatibility.ProtocolsEnabled || s_aborted)
+                return ours;
+
+            if (!ours)
+            {
+                AbortEpoch(
+                    "received a vanilla or foreign lock packet while sequenced protocol was active",
+                    true);
                 return false;
+            }
+
             try
             {
-                if (bytes.Length != 5)
+                if (bytes.Length != FrameSize || bytes[4] != ProtocolVersion)
                 {
-                    MultiplayerStabilityMain.Log("[SeqLock][ERR] expected 5-byte lock payload, got " + bytes.Length + " -- letting vanilla handle.");
-                    return false;
+                    AbortEpoch(
+                        "invalid frame length/version " + bytes.Length + "/" +
+                        (bytes.Length > 4 ? bytes[4].ToString() : "missing"),
+                        true);
+                    return true;
                 }
-                byte pt = bytes[0];
-                int seq = bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24);
-                long k = Key(pt, seq);
-                s_Groups[k] = Get(k).Add(player);
+
+                byte kind = bytes[5];
+                byte point = bytes[6];
+                int sequence = ReadInt32(bytes, 7);
+                if (kind == KindAbort)
+                {
+                    AbortEpoch(
+                        "peer " + player + " aborted at point " + point + " sequence " + sequence,
+                        false);
+                    return true;
+                }
+                if (kind != KindReach || sequence < 0)
+                {
+                    AbortEpoch("unknown or invalid frame kind/sequence", true);
+                    return true;
+                }
+
+                long key = Key(point, sequence);
+                s_groups[key] = Get(key).Add(player);
                 return true;
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[SeqLock][ERR] TryOnReceived: " + e);
-                return true;   // consumed; dropping one signal is safer than double-processing
+                AbortEpoch("receive failed: " + e.Message, true);
+                return true;
             }
         }
 
         internal static void ResetBaseline(string reason)
         {
-            if (s_Groups.Count == 0 && s_NextSeq.Count == 0 && s_ActiveSeq.Count == 0)
-                return;
-            s_Groups.Clear();
-            s_NextSeq.Clear();
-            s_ActiveSeq.Clear();
-            s_ActiveSince.Clear();
-            MultiplayerStabilityMain.Log("[SeqLock] baseline reset (" + reason + ").");
+            s_groups.Clear();
+            s_nextSeq.Clear();
+            s_activeSeq.Clear();
+            s_activeSince.Clear();
+            s_lastAnnounce.Clear();
+            s_aborted = false;
+            MultiplayerStabilityMain.LogNoThrow("[SeqLock] Baseline reset (" + reason + ").");
         }
 
         private static NetPlayerGroup Get(long key)
-            => s_Groups.TryGetValue(key, out var g) ? g : NetPlayerGroup.Empty;
+            => s_groups.TryGetValue(key, out NetPlayerGroup group)
+                ? group
+                : NetPlayerGroup.Empty;
 
-        private static void Complete(byte pt, int seq, string why)
+        private static void Complete(byte point, int sequence)
         {
-            s_ActiveSeq.Remove(pt);
-            s_ActiveSince.Remove(pt);
-            // Drop this and any older buckets for this point; only future (early-arrived) buckets survive.
+            s_activeSeq.Remove(point);
+            s_activeSince.Remove(point);
+            s_lastAnnounce.Remove(point);
             var stale = new List<long>();
-            foreach (var kv in s_Groups)
+            foreach (KeyValuePair<long, NetPlayerGroup> pair in s_groups)
             {
-                if ((byte)(kv.Key >> 32) == pt && (int)(uint)kv.Key <= seq)
-                    stale.Add(kv.Key);
+                if ((byte)(pair.Key >> 32) == point && (int)(uint)pair.Key <= sequence)
+                    stale.Add(pair.Key);
             }
-            foreach (var key in stale)
-                s_Groups.Remove(key);
-            MultiplayerStabilityMain.Log("[SeqLock] barrier #" + seq + " (point " + pt + ") complete (" + why + ").");
+            for (int i = 0; i < stale.Count; i++)
+                s_groups.Remove(stale[i]);
+            MultiplayerStabilityMain.LogNoThrow(
+                "[SeqLock] Barrier #" + sequence + " (point " + point + ") complete.");
         }
 
-        // True only if every remote required player has signalled some ordinal STRICTLY GREATER than seq
-        // for this point -- provable "peer is ahead", which cannot occur for a slow-but-healthy peer.
-        private static bool EveryRemotePlayerPastOrdinal(byte pt, int seq)
+        private static void AbortEpoch(string reason, bool broadcast)
         {
-            var union = NetPlayerGroup.Empty;
-            foreach (var kv in s_Groups)
+            if (s_aborted)
+                return;
+
+            byte point = 0;
+            int sequence = -1;
+            foreach (KeyValuePair<byte, int> pair in s_activeSeq)
             {
-                if ((byte)(kv.Key >> 32) == pt && (int)(uint)kv.Key > seq)
-                    union = UnionInto(union, kv.Value);
+                point = pair.Key;
+                sequence = pair.Value;
+                break;
             }
-            union = union.Add(NetworkingManager.LocalNetPlayer);   // local is trivially "here"
-            return union.Contains(NetworkingManager.PlayersReadyMask);
-        }
 
-        // NetPlayerGroup has no direct union; fold the ready mask's members that appear in either group.
-        private static NetPlayerGroup UnionInto(NetPlayerGroup acc, NetPlayerGroup add)
-        {
-            foreach (var p in PhotonManager.Instance.ActivePlayers)
+            if (broadcast)
             {
-                var np = p.NetPlayer;
-                if (add.Contains(np))
-                    acc = acc.Add(np);
+                for (int i = 0; i < 3; i++)
+                    Announce(KindAbort, point, sequence);
             }
-            return acc;
+
+            s_aborted = true;
+            s_groups.Clear();
+            s_nextSeq.Clear();
+            s_activeSeq.Clear();
+            s_activeSince.Clear();
+            s_lastAnnounce.Clear();
+            MultiplayerStabilityMain.LogNoThrow(
+                "[SeqLock][WARN] Sequenced epoch aborted; returning to vanilla barriers: " + reason);
         }
 
-        private static void Announce(byte pt, int seq)
-        {
-            var buf = new byte[5];
-            buf[0] = pt;
-            buf[1] = (byte)seq;
-            buf[2] = (byte)(seq >> 8);
-            buf[3] = (byte)(seq >> 16);
-            buf[4] = (byte)(seq >> 24);
-            if (!PhotonManager.Instance.SendMessageToOthers(8, buf, 0, 5))
-                MultiplayerStabilityMain.Log("[SeqLock][ERR] failed to send sequenced lock #" + seq);
-        }
-
-        private static bool AllPlayersModded()
+        private static bool Announce(byte kind, byte point, int sequence)
         {
             try
             {
-                var photon = PhotonManager.Instance;
-                if (photon == null)
-                    return false;
-                foreach (var info in photon.ActivePlayers)
+                var frame = new byte[FrameSize];
+                WriteUInt32(frame, 0, Magic);
+                frame[4] = ProtocolVersion;
+                frame[5] = kind;
+                frame[6] = point;
+                WriteInt32(frame, 7, sequence);
+                bool sent = PhotonManager.Instance != null
+                    && PhotonManager.Instance.SendMessageToOthers(8, frame, 0, frame.Length);
+                if (!sent)
                 {
-                    ModData[] mods;
-                    if (!PhotonManager.Mods.TryGetModsData(info.UserId, out mods))
-                        return false;
-                    bool found = false;
-                    foreach (var m in mods)
-                    {
-                        if (m.Id == MultiplayerStabilityMain.UniqueName) { found = true; break; }
-                    }
-                    if (!found)
-                        return false;
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[SeqLock][WARN] send failed for kind=" + kind + " point=" + point
+                        + " sequence=" + sequence + "; caller may retry.");
                 }
-                return true;
+                return sent;
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[SeqLock][WARN] send exception; caller may retry: " + e.Message);
                 return false;
             }
         }
+
+        private static void LogActiveOnce()
+        {
+            if (s_loggedActive)
+                return;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[SeqLock] Active under exact-build compatibility latch.");
+            s_loggedActive = true;
+        }
+
+        private static bool HasMagic(ReadOnlySpan<byte> bytes)
+            => bytes.Length >= 4 && ReadUInt32(bytes, 0) == Magic;
+
+        private static void WriteInt32(byte[] buffer, int offset, int value)
+            => WriteUInt32(buffer, offset, unchecked((uint)value));
+
+        private static void WriteUInt32(byte[] buffer, int offset, uint value)
+        {
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+            buffer[offset + 2] = (byte)(value >> 16);
+            buffer[offset + 3] = (byte)(value >> 24);
+        }
+
+        private static uint ReadUInt32(ReadOnlySpan<byte> buffer, int offset)
+            => (uint)(buffer[offset]
+                | (buffer[offset + 1] << 8)
+                | (buffer[offset + 2] << 16)
+                | (buffer[offset + 3] << 24));
+
+        private static int ReadInt32(ReadOnlySpan<byte> buffer, int offset)
+            => unchecked((int)ReadUInt32(buffer, offset));
     }
 
     [HarmonyPatch(typeof(LockNetManager), nameof(LockNetManager.Lock))]
@@ -208,13 +281,10 @@ namespace MultiplayerStability
     {
         private static bool Prefix(NetLockPointId pointId, ref bool __result)
         {
-            bool result;
-            if (SequencedLocks.TryLock(pointId, out result))
-            {
-                __result = result;
-                return false;   // skip vanilla
-            }
-            return true;        // vanilla
+            if (!SequencedLocks.TryLock(pointId, out bool result))
+                return true;
+            __result = result;
+            return false;
         }
     }
 
@@ -231,8 +301,6 @@ namespace MultiplayerStability
         private static void Postfix() => SequencedLocks.ResetBaseline("room leave");
     }
 
-    // Every co-op (re)join and desync-resync routes through one of these; resetting here gives both clients
-    // a common ordinal baseline for the identical barrier sequence that follows the transfer.
     [HarmonyPatch(typeof(SaveNetManager), nameof(SaveNetManager.UploadSave))]
     internal static class SaveNetManager_UploadSave_ResetSeq_Patch
     {

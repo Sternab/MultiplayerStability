@@ -6,30 +6,29 @@
 // syncData). The recurring defect family this mod exists for is client-local state -- fog-of-war,
 // camera, render visibility, view bones, UI refresh timing, preview units -- feeding hashed simulation.
 //
-// 23 components across 25 files: prevention fixes, transfer/lobby infrastructure, and
-// log-only diagnostics. The repository-root DESIGN_NOTES.md indexes the components, validation
-// status, compatibility rules, known limitations, and planned hardening work.
+// The repository-root DESIGN_NOTES.md indexes the components, validation status, compatibility
+// rules, and known limitations.
 //
-// PEER-COMPATIBILITY (three categories):
-//   Subset-safe:           diagnostics + UI-only fixes + the transfer ack pump (any subset of machines).
-//   Negotiated protocol:   Steam P2P transfer, Sequenced Locks, Photon window boost (self-gate on
-//                          every-peer-modded and engage only then).
-//   Exact parity required: EVERY RNG- or simulation-changing prevention fix. Until the 0.9
-//                          session-latched compatibility gate ships, run the IDENTICAL build on every
-//                          machine (see DESIGN_NOTES.md).
+// PEER COMPATIBILITY:
+//   Subset-safe: diagnostics, UI-only guards, and the transfer acknowledgement pump.
+//   Epoch-gated: custom protocols and every simulation-changing fix. Before each save-transfer
+//                relaunch, the host distributes one exact-build decision. Incompatible 0.9 peers
+//                select vanilla behavior. Pre-0.9 builds do not honor that decision and remain
+//                unsupported in mixed-version sessions.
 //
 // Design rules (DESIGN_NOTES.md has the full statement):
 //   - No automatic resync: recovery stays under player control; the mod never forces a reload.
-//   - Best-effort fail-open: patching is isolated per class -- a failed class logs [Init][ERR] and stays
-//     inert while the rest continue, so a component spanning several classes or targets can be left
-//     partially active; runtime guards fall back to the vanilla path at their site.
+//   - Patch isolation: a failed class logs [Init][ERR] while unrelated classes continue. A component
+//     spanning several classes can be left partially active, so any startup error invalidates the build
+//     for multiplayer. Runtime failure behavior is documented at each patch site.
 //   - Solo-safe: simulation-changing behavior is MP-gated; solo play takes the vanilla paths.
 //   - Evidence requirement: prevention fixes require a two-sided capture or a complete engine-source
 //     path that identifies the mechanism.
 //
-// Planned 0.9 hardening is listed in DESIGN_NOTES.md. Loading-speed work lives in the separate FasterLoadTimes mod
-// (not co-op-specific; subset-safe).
+// General loading-speed work lives in the separate FasterLoadTimes mod.
 // =====================================================================================================
+using System;
+using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 using Kingmaker.Modding;                          // OwlcatModification, OwlcatModificationEnterPoint
@@ -38,8 +37,8 @@ namespace MultiplayerStability
 {
     public static class MultiplayerStabilityMain
     {
-        // Must match Manifest.UniqueName in MultiplayerStability.asset: it is the identity string other
-        // clients see in the Photon mod-list property ("m"), which TransferBooster compares against.
+        // Must match Manifest.UniqueName in MultiplayerStability.asset. MultiplayerCompatibility uses
+        // this ID in the Photon mod-list property ("m") when evaluating exact-build parity.
         internal const string UniqueName = "MultiplayerStability";
 
         public static OwlcatModification Modification { get; private set; }
@@ -48,7 +47,7 @@ namespace MultiplayerStability
         public static void Initialize(OwlcatModification modification)
         {
             Modification = modification;
-            Log("[Init] Enter point reached; bootstrapping Harmony.");
+            LogNoThrow("[Init] Enter point reached; bootstrapping Harmony.");
             var harmony = new Harmony(modification.Manifest.UniqueName);
             // Per-class patching with isolation -- NOT a blanket PatchAll. PatchAll processes patch classes
             // sequentially and a single throw (e.g. a TargetMethods that resolves ZERO methods after a game
@@ -56,7 +55,19 @@ namespace MultiplayerStability
             // manual Wire() calls below: the transfer stack would silently die and saves fall back to
             // vanilla speed with no crash. Each class now fails alone, loudly.
             int patched = 0, failed = 0;
-            foreach (var type in Assembly.GetExecutingAssembly().GetTypes())
+            Type[] patchTypes;
+            try
+            {
+                patchTypes = Assembly.GetExecutingAssembly().GetTypes();
+            }
+            catch (ReflectionTypeLoadException e)
+            {
+                patchTypes = e.Types.Where(t => t != null).ToArray();
+                foreach (var loaderException in e.LoaderExceptions ?? Array.Empty<Exception>())
+                    LogNoThrow("[Init][ERR] type load: " + loaderException.Message);
+            }
+
+            foreach (var type in patchTypes)
             {
                 try
                 {
@@ -69,7 +80,7 @@ namespace MultiplayerStability
                     failed++;
                     // "component inert" here means THIS PATCH CLASS is inert; a component built from
                     // several patch classes can be left partially active (see DESIGN_NOTES.md).
-                    Log("[Init][ERR] patch class " + type.Name + " failed (component inert, others unaffected): " + e.Message);
+                    LogNoThrow("[Init][ERR] patch class " + type.Name + " failed (class inert, others unaffected): " + e.Message);
                 }
             }
             SafeWire("SteamSaveTransfer", () => SteamSaveTransfer.Wire());
@@ -77,7 +88,8 @@ namespace MultiplayerStability
             SafeWire("WeatherRngFix", () => WeatherRngFix.Wire(harmony));
             SafeWire("LeakDetector", () => LeakDetector.Wire(harmony));        // proactive out-of-tick hashed-draw detector (patch early, before gameplay JIT)
             SafeWire("PreviewRulebookGuard", () => PreviewRulebookGuard.Wire(harmony)); // block preview-ghost global rulebook subscriptions (registration-time guard; patch early, before gameplay JIT)
-            Log("[Init] Patches applied (" + patched + " classes" + (failed > 0 ? ", " + failed + " FAILED" : "") + ").");
+            LogNoThrow("[Init] Patches applied (" + patched + " classes"
+                + (failed > 0 ? ", " + failed + " FAILED" : "") + ").");
         }
 
         private static void SafeWire(string name, System.Action wire)
@@ -88,13 +100,27 @@ namespace MultiplayerStability
             }
             catch (System.Exception e)
             {
-                Log("[Init][ERR] " + name + ".Wire failed (component inert, others unaffected): " + e.Message);
+                LogNoThrow(
+                    "[Init][ERR] " + name
+                    + ".Wire failed (component inert, others unaffected): " + e.Message);
             }
         }
 
         public static void Log(string msg)
         {
             Modification?.Logger.Log("[MPStability] " + msg);
+        }
+
+        public static void LogNoThrow(string msg)
+        {
+            try
+            {
+                Log(msg);
+            }
+            catch
+            {
+                // Logging must never alter a patched gameplay or recovery path.
+            }
         }
     }
 }

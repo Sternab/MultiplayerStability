@@ -20,8 +20,9 @@ namespace MultiplayerStability
         // k_nSteamNetworkingSend_Reliable(8) | _AutoRestartBrokenSession(32); verified in Constants.cs.
         private const int SendReliable = 8 | 32;
 
-        private static bool s_initTried;
         private static bool s_available;
+        private static DateTime s_nextAvailabilityProbeUtc;
+        private static bool s_loggedUnavailable;
         private static ulong s_localSteamId;
         private static Callback<SteamNetworkingMessagesSessionRequest_t> s_sessionReq;
         private static Callback<SteamNetworkingMessagesSessionFailed_t> s_sessionFailed;
@@ -36,24 +37,34 @@ namespace MultiplayerStability
 
         internal static ulong LocalSteamId => s_localSteamId;
 
-        // True only on an initialized Steam client. Probes once; safe to call every frame afterward.
+        // True only on an initialized Steam client. A probe made before Steam finishes initializing is
+        // retried after five seconds instead of permanently disabling the transport for this process.
         internal static bool Available
         {
             get
             {
-                if (s_initTried)
-                    return s_available;
-                s_initTried = true;
+                if (s_available)
+                    return true;
+                if (DateTime.UtcNow < s_nextAvailabilityProbeUtc)
+                    return false;
+                s_nextAvailabilityProbeUtc = DateTime.UtcNow.AddSeconds(5);
                 try
                 {
                     // GetSteamID throws (InteropHelp.TestIfAvailableClient) if SteamAPI isn't initialized.
                     s_localSteamId = SteamUser.GetSteamID().m_SteamID;
                     s_available = s_localSteamId != 0UL;
+                    if (s_available)
+                        s_loggedUnavailable = false;
                 }
                 catch (Exception e)
                 {
                     s_available = false;
-                    MultiplayerStabilityMain.Log("[SteamP2P] Steam not available (staying on Photon): " + e.Message);
+                    if (!s_loggedUnavailable)
+                    {
+                        s_loggedUnavailable = true;
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[SteamP2P] Steam unavailable; will retry and use Photon meanwhile: " + e.Message);
+                    }
                 }
                 return s_available;
             }
@@ -62,10 +73,12 @@ namespace MultiplayerStability
         // Registers session callbacks, warms the relay network, and starts the receive pump. Idempotent.
         internal static void EnsureInit()
         {
-            if (!Available || s_sessionReq != null)
+            if (!Available || s_pump != null)
                 return;
-            s_sessionReq = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequest);
-            s_sessionFailed = Callback<SteamNetworkingMessagesSessionFailed_t>.Create(OnSessionFailed);
+            if (s_sessionReq == null)
+                s_sessionReq = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequest);
+            if (s_sessionFailed == null)
+                s_sessionFailed = Callback<SteamNetworkingMessagesSessionFailed_t>.Create(OnSessionFailed);
             // Valve's transport sends at a FIXED rate = clamp(256KB/s, SendRateMin, SendRateMax); upward
             // bandwidth probing is not implemented (proven by field tests 2-5: the live rate always equals
             // the floor, and a high floor causes loss without backoff). The transfer code adapts this
@@ -77,7 +90,8 @@ namespace MultiplayerStability
             // the telemetry's "via [...]" shows which transport the session actually negotiated.
             SetGlobalConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable,
                 Constants.k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All);
-            try { SteamNetworkingUtils.InitRelayNetworkAccess(); } catch (Exception e) { MultiplayerStabilityMain.Log("[SteamP2P] InitRelayNetworkAccess: " + e.Message); }
+            try { SteamNetworkingUtils.InitRelayNetworkAccess(); }
+            catch (Exception e) { MultiplayerStabilityMain.LogNoThrow("[SteamP2P] InitRelayNetworkAccess: " + e.Message); }
             if (s_pump == null)
             {
                 var go = new GameObject("MPStability_SteamPump");
@@ -85,7 +99,7 @@ namespace MultiplayerStability
                 go.hideFlags = HideFlags.HideAndDontSave;
                 s_pump = go.AddComponent<SteamP2PPump>();
             }
-            MultiplayerStabilityMain.Log("[SteamP2P] Initialized. LocalSteamId=" + s_localSteamId);
+            MultiplayerStabilityMain.LogNoThrow("[SteamP2P] Initialized. LocalSteamId=" + s_localSteamId);
         }
 
         internal static void AllowSessionFrom(ulong steamId) => s_acceptFrom.Add(steamId);
@@ -108,7 +122,7 @@ namespace MultiplayerStability
             }
         }
 
-        private static void SetGlobalConfigInt(ESteamNetworkingConfigValue key, int value)
+        private static bool SetGlobalConfigInt(ESteamNetworkingConfigValue key, int value)
         {
             var handle = GCHandle.Alloc(value, GCHandleType.Pinned);
             try
@@ -116,11 +130,13 @@ namespace MultiplayerStability
                 bool ok = SteamNetworkingUtils.SetConfigValue(key,
                     ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Global, IntPtr.Zero,
                     ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32, handle.AddrOfPinnedObject());
-                MultiplayerStabilityMain.Log("[SteamP2P] Config " + key + "=" + value + " ok=" + ok);
+                MultiplayerStabilityMain.LogNoThrow("[SteamP2P] Config " + key + "=" + value + " ok=" + ok);
+                return ok;
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[SteamP2P][ERR] SetConfigValue " + key + ": " + e.Message);
+                MultiplayerStabilityMain.LogNoThrow("[SteamP2P][ERR] SetConfigValue " + key + ": " + e.Message);
+                return false;
             }
             finally
             {
@@ -199,8 +215,11 @@ namespace MultiplayerStability
         {
             if (bytesPerSecond == s_lastRateFloor)
                 return;
-            s_lastRateFloor = bytesPerSecond;
-            SetGlobalConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin, bytesPerSecond);
+            if (SetGlobalConfigInt(
+                ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin, bytesPerSecond))
+            {
+                s_lastRateFloor = bytesPerSecond;
+            }
         }
 
         internal static void CloseSession(ulong peerSteamId)
@@ -213,7 +232,7 @@ namespace MultiplayerStability
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[SteamP2P] CloseSession: " + e.Message);
+                MultiplayerStabilityMain.LogNoThrow("[SteamP2P] CloseSession: " + e.Message);
             }
         }
 
@@ -226,7 +245,15 @@ namespace MultiplayerStability
             int n;
             do
             {
-                n = SteamNetworkingMessages.ReceiveMessagesOnChannel(Channel, s_recvBuf, s_recvBuf.Length);
+                try
+                {
+                    n = SteamNetworkingMessages.ReceiveMessagesOnChannel(Channel, s_recvBuf, s_recvBuf.Length);
+                }
+                catch (Exception e)
+                {
+                    MultiplayerStabilityMain.LogNoThrow("[SteamP2P][ERR] receive pump: " + e.Message);
+                    return;
+                }
                 for (int i = 0; i < n; i++)
                 {
                     IntPtr ptr = s_recvBuf[i];
@@ -240,7 +267,7 @@ namespace MultiplayerStability
                     }
                     catch (Exception e)
                     {
-                        MultiplayerStabilityMain.Log("[SteamP2P][ERR] pump: " + e);
+                        MultiplayerStabilityMain.LogNoThrow("[SteamP2P][ERR] pump: " + e);
                     }
                     finally
                     {
@@ -253,23 +280,39 @@ namespace MultiplayerStability
 
         private static void OnSessionRequest(SteamNetworkingMessagesSessionRequest_t req)
         {
-            ulong who = req.m_identityRemote.GetSteamID64();
-            if (s_acceptFrom.Contains(who))
+            try
             {
-                SteamNetworkingMessages.AcceptSessionWithUser(ref req.m_identityRemote);
-                MultiplayerStabilityMain.Log("[SteamP2P] Accepted P2P session from " + who);
+                ulong who = req.m_identityRemote.GetSteamID64();
+                if (s_acceptFrom.Contains(who))
+                {
+                    SteamNetworkingMessages.AcceptSessionWithUser(ref req.m_identityRemote);
+                    MultiplayerStabilityMain.LogNoThrow("[SteamP2P] Accepted P2P session from " + who);
+                }
+                else
+                {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[SteamP2P] Ignored unexpected P2P session from " + who);
+                }
             }
-            else
+            catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[SteamP2P] Ignored unexpected P2P session from " + who);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[SteamP2P][ERR] session-request handler: " + e.Message);
             }
         }
 
         private static void OnSessionFailed(SteamNetworkingMessagesSessionFailed_t f)
         {
             ulong who = f.m_info.m_identityRemote.GetSteamID64();
-            MultiplayerStabilityMain.Log("[SteamP2P] Session failed with " + who + " (state=" + f.m_info.m_eState + ")");
-            SessionFailed?.Invoke(who);
+            MultiplayerStabilityMain.LogNoThrow("[SteamP2P] Session failed with " + who + " (state=" + f.m_info.m_eState + ")");
+            try
+            {
+                SessionFailed?.Invoke(who);
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow("[SteamP2P][ERR] session-failure handler: " + e.Message);
+            }
         }
     }
 

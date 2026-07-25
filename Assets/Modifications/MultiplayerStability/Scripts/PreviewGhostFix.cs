@@ -29,8 +29,7 @@
 //   C. (v0.8.24) The whole public UnitHelper.Copy(..., preview: true) holds the context in MP, closing
 //      vanilla's own scope hole over CopyItems/CopyFacts/view creation.
 //
-// Solo untouched (all three patches gate on IsMultiplayer). Peer compatibility: exact parity required,
-// like every sim/RNG-changing fix (see DESIGN_NOTES.md).
+// Solo, unresolved, and mixed sessions are untouched. Exact parity is required.
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;
@@ -60,18 +59,20 @@ namespace MultiplayerStability
             __state = null;
             try
             {
-                if (!NetworkingManager.IsMultiplayer || !preview)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled || !preview)
                     return;
                 __state = ContextData<DisableStatefulRandomContext>.Request();
                 if (!s_loggedActive)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[GhostFix] Full preview-copy RNG scope active under exact parity.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[GhostFix] Full preview-copy scope active -- preview item creation no longer mints hashed uuids in multiplayer.");
                 }
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                // fail-open: vanilla scope
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[GhostFix][ERR] preview-copy RNG context request failed: " + e.Message);
             }
         }
 
@@ -85,7 +86,8 @@ namespace MultiplayerStability
             {
                 // A stuck DisableStatefulRandomContext would contaminate EVERY subsequent hashed draw --
                 // this failure must not pass silently.
-                MultiplayerStabilityMain.Log("[GhostFix][ERR] DisableStatefulRandomContext dispose FAILED -- stateful RNG may be stuck non-deterministic: " + e);
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[GhostFix][ERR] RNG context dispose failed; context may remain active: " + e);
             }
             return __exception;
         }
@@ -105,7 +107,7 @@ namespace MultiplayerStability
             __state = null;
             try
             {
-                if (!NetworkingManager.IsMultiplayer)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled)
                     return;
                 var ownerUnit = (manager != null ? manager.Owner : null) as AbstractUnitEntity;
                 if (ownerUnit == null || !ownerUnit.IsPreviewUnit)
@@ -113,19 +115,28 @@ namespace MultiplayerStability
                 __state = ContextData<DisableStatefulRandomContext>.Request();
                 if (!s_loggedActive)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[GhostFix] Preview-owned fact RNG guard active under exact parity.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[GhostFix] Active -- preview-owned fact attaches are now hashed-stream-safe.");
                 }
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[GhostFix][ERR] prefix: " + e.Message);
+                MultiplayerStabilityMain.LogNoThrow("[GhostFix][ERR] prefix: " + e.Message);
             }
         }
 
         private static void Finalizer(IDisposable __state)
         {
-            __state?.Dispose();
+            try
+            {
+                __state?.Dispose();
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[GhostFix][ERR] fact RNG context dispose failed; context may remain active: " + e);
+            }
         }
     }
 
@@ -134,7 +145,9 @@ namespace MultiplayerStability
     {
         private static bool Prefix(BaseUnitEntity unit, ref bool __result)
         {
-            if (NetworkingManager.IsMultiplayer && unit != null && unit.IsPreviewUnit)
+            if (MultiplayerCompatibility.SimulationFixesEnabled
+                && unit != null
+                && unit.IsPreviewUnit)
             {
                 __result = false;
                 return false;

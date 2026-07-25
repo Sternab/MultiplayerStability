@@ -1,142 +1,148 @@
 # Multiplayer Stability
 
-A co-op stability mod for **Warhammer 40,000: Rogue Trader**. It fixes several confirmed
-desynchronization paths, adds diagnostics for unresolved cases, and accelerates save transfers
-between players.
+Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue Trader**. It
+contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
+and faster save transfer between players.
 
-The current release is **v0.8.32** for game build **1.6.1.514**.
+The current source is **v0.9.0** for game build **1.6.1.514**.
 
-> **Experimental release.** Multiplayer Stability is based on paired game logs and source review,
-> but some fixes still need post-fix field validation. Every player in a session must use the same
-> mod version. The mod never starts a resync automatically.
+> **Review build:** v0.9.0 has passed source review and compilation, but has not yet completed a
+> post-fix multiplayer field session. Use the same version on every machine and keep save backups.
 
 ## Features
 
-- Fixes confirmed cases where local camera, fog, view, physics, UI, or cache state changes hashed
-  simulation state.
-- Isolates character-preview units from gameplay RNG, facts, auras, and global rulebook handlers.
-- Prevents several dialogue, weather, projectile, animation, charge, and trap paths from diverging
-  between peers.
-- Adds desync reports with state buckets, RNG fingerprints, entity hashes, and recent creation
-  history.
-- Transfers saves through Steam Networking Messages when available, with Photon retained as the
-  control channel and fallback. Test sessions measured an improvement of about 8x.
-- Sequences selected loading barriers that could otherwise leave a client waiting at 100 percent.
+- Prevents confirmed paths where local camera, fog, view, UI, physics, or cache state changes
+  synchronized simulation state.
+- Isolates character-preview units from gameplay RNG, facts, auras, UUID allocation, and global
+  rulebook subscriptions.
+- Adds desync reports with state buckets, full RNG fingerprints, per-entity hashes, and recent
+  creation history.
+- Uses Steam Networking Messages for bulk save data when exact-build compatibility is confirmed.
+  Photon remains the control path and per-peer fallback.
+- Adds framing, transfer identity, size checks, SHA-256 validation, receiver acceptance reporting,
+  retries, and timeouts to the mod's custom network paths.
+- Sequences selected loading barriers that could otherwise leave a peer waiting indefinitely.
+
+The mod does not start a resync automatically and does not suppress Rogue Trader's desync dialog.
 
 ## Requirements
 
-- Warhammer 40,000: Rogue Trader build **1.6.1.514**.
-- The **same Multiplayer Stability version on every player**.
+- Rogue Trader build **1.6.1.514**.
+- The same Multiplayer Stability version on every player.
 - The same gameplay-affecting mods on every player.
-- Steam is required only for accelerated save transfer. Other fixes are expected to work on GOG,
-  but GOG has not been field tested.
+- Steam is required only for accelerated save transfer.
 
-There are no required mod dependencies.
+GOG and sessions with four to six players have not been field tested. There are no required mod
+dependencies.
 
 ## Installation
 
-### Recommended: ModFinder
+### ModFinder
 
-[ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) can install and manage
-Owlcat template mods. Multiplayer Stability is not yet in its built-in catalog, so install the
-release archive directly:
+[ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
+If Multiplayer Stability is not yet in its catalog:
 
-1. Install and run ModFinder.
-2. Download `MultiplayerStability-0.8.32.zip` from
+1. Download `MultiplayerStability-0.9.0.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
-3. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
-4. Confirm that **Multiplayer Stability** is installed and enabled on every player's machine.
-5. Launch the game, open **Mods** from the title screen, enable the mod if required, and restart
-   when prompted.
+2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
+3. Confirm that Multiplayer Stability is installed and enabled on every machine.
+4. Launch the game, enable the mod from **Mods** if required, and restart when prompted.
 
 ### Manual
 
-1. Download `MultiplayerStability-0.8.32.zip` from the Releases page.
-2. Create this folder:
+1. Download the release ZIP.
+2. Create:
    `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader\Modifications\MultiplayerStability`
-3. Extract the contents of the ZIP into that folder. The final path must be:
-   `...\Modifications\MultiplayerStability\OwlcatModificationManifest.json`
-4. Launch the game, open **Mods** from the title screen, enable **Multiplayer Stability**, and
-   restart when prompted.
+3. Extract the ZIP contents into that folder.
+4. Confirm this file exists:
+   `...\MultiplayerStability\OwlcatModificationManifest.json`
+5. Enable the mod in game and restart when prompted.
 
-Do not extract the files directly into `Modifications`, and avoid an extra nested
+Do not extract directly into `Modifications`, and avoid a doubled
 `MultiplayerStability\MultiplayerStability` folder.
 
-## Multiplayer Use
+## Multiplayer Check
 
-Before starting or joining a session:
+At startup, search `GameLogFull.txt` for:
 
-1. Check that every player has the same game build and mod list.
-2. Check that every player has the same Multiplayer Stability version.
-3. After launch, search `GameLogFull.txt` for:
-   `[MPStability] [Init] Patches applied (45 classes)`
-4. Do not continue if any player has `[MPStability] [Init][ERR]` or `PATTERN NOT FOUND` lines.
+`[MPStability] [Init] Patches applied (`
 
-The current release does not enforce version parity itself. Mixed installations can create new
-desyncs because several fixes change simulation behavior.
+Do not continue if the line reports `FAILED`, or if any Multiplayer Stability line contains
+`[Init][ERR]`, `PATTERN NOT FOUND`, or a component `[ERR]`. Patch classes load independently, so one
+startup failure can leave a multi-class component only partly active.
 
-## Known Issues
+Before a save-transfer launch, peers report their compiled module ID to the room owner. The host
+checks that identity and the advertised manifest version, then sends one reliable compatibility
+decision before the game's `LoadSave` message:
 
-- Two desync classes are instrumented but not fixed: weather selection at combat exit and the
-  Tactician momentum remainder.
-- The charge-path and trap containment fixes still need dedicated post-fix reproductions.
-- Several newer fixes have source-confirmed mechanisms but limited field coverage.
-- Hidden AI turns run at 1x in co-op because the vanilla fast-forward condition depends on local
-  visibility state.
-- The augmentation screen does not play its random bark in co-op.
-- Projectile mechanics use the target entity's base point instead of local view bones.
-- Four to six players and GOG multiplayer remain untested.
+- matching v0.9.0 manifest versions and compiled module IDs enable simulation fixes and custom
+  protocols;
+- a missing or different build selects vanilla simulation and transfer behavior for compatible
+  0.9 clients;
+- if a peer advertises Multiplayer Stability but the host decision is missing or invalid, the
+  client refuses the load rather than enter play with a different policy.
 
-See [DESIGN_NOTES.md](DESIGN_NOTES.md) for the component list, validation status, tradeoffs, and
-planned 0.9 hardening work.
+Look for `[Compat] Compatible` on every peer when testing the fixes. Pre-0.9 builds do not understand
+this decision and remain unsupported in mixed-version sessions. The module ID identifies the
+compiled assembly but does not prove that every Harmony patch installed correctly, so clean startup
+logs are still required.
 
-## Uninstalling and Saves
+## Known Limitations
 
-The mod adds no save-required content or blueprints. To remove it, disable or uninstall it on every
-player's machine before the next session. Existing saves then return to vanilla multiplayer
-behavior.
+- The weather combat-exit path and Tactician momentum remainder are instrumented, not fixed.
+- The charge-path, trap containment, and v0.9 network hardening need post-fix field validation.
+- Dash delivery removes view-position timing from target delivery, but local movement completion can
+  still select a different tick.
+- Sorting range-query results cannot repair different physics candidate membership.
+- Hidden AI turns run at 1x in multiplayer because the faster vanilla branch uses local visibility.
+- Projectile mechanics use entity geometry instead of local view bones. Starship projectile geometry
+  has limited field coverage.
+- The augmentation screen omits its client-random bark in multiplayer.
+- A receiver can accept a Steam save and still miss every completion message, causing the host to
+  resend the same save through Photon. The bytes are validated, but the duplicate transfer is slower.
 
-Keep a save backup before changing any multiplayer mod set.
+Implementation status and evidence are listed in [DESIGN_NOTES.md](DESIGN_NOTES.md).
 
 ## Troubleshooting
 
-`GameLogFull.txt` is in:
+`GameLogFull.txt` is stored in:
 
 `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader`
 
-Search for `MPStability`. When reporting a desync, include `GameLogFull.txt` from every player and
-note the action immediately before the first desync notification.
+When reporting a desync:
 
-Common checks:
+1. Collect `GameLogFull.txt` from every peer.
+2. Record the action immediately before the first desync dialog.
+3. Include the installed manifest version and startup patch result from every machine.
+4. Keep the full logs private until account identifiers have been removed.
 
-- Confirm the installed manifest reports the expected version.
-- Confirm every peer uses the same build.
-- Confirm the install path is not nested twice.
-- Check startup for `[Init][ERR]` and `PATTERN NOT FOUND`.
-- After a game update, treat the mod as unverified until its Harmony targets have been reviewed.
+After a Rogue Trader update, treat the mod as unverified until its Harmony targets and reflected
+members have been reviewed against the new build.
 
-## Building from Source
+## Uninstalling
 
-1. Get Owlcat Games' official `WhRtModificationTemplate`.
-2. Open the template in Unity **6000.0.64f1**.
-3. Copy
-   `Assets/Modifications/MultiplayerStability`
-   from this repository into the template's `Assets/Modifications/` folder.
-4. In Unity, run `Assets > Modification Tools > Build`.
-5. Verify the generated manifest version and DLL timestamp before installing or distributing the
-   result.
+The mod adds no save-required content or blueprints. Disable or remove it on every machine before
+the next session. Existing saves then use vanilla multiplayer behavior.
 
-The template generates the `Generated` folder during the build. It is intentionally not tracked.
-No Python tooling is required to build the mod.
+## Building
 
-Implementation notes are in [DESIGN_NOTES.md](DESIGN_NOTES.md). Each C# file also documents its
-Harmony targets, reason for patching, multiplayer gate, and failure behavior.
+1. Use `Modding/WhRtModificationTemplate.tar` from the installed Rogue Trader build you are
+   targeting. Do not assume that a previously extracted project was updated with the game.
+2. When reusing an editor project, close Unity and refresh its `Assets/RogueTraderAssemblies`
+   binaries from that template. Preserve existing `.meta` files. Do not copy
+   `WH40KRT_Data/Managed` wholesale because the template contains editor-specific assembly variants.
+3. Open the template in Unity **6000.0.64f1**.
+4. Copy `Assets/Modifications/MultiplayerStability` into the template's
+   `Assets/Modifications/` folder.
+5. Run `Assets > Modification Tools > Build`.
+6. Verify the packaged manifest version and DLL timestamp before distribution.
+
+The template generates `Generated`; it is intentionally not tracked. No Python tooling is required.
 
 ## Credits
 
-- Built with Owlcat Games' official Rogue Trader modification template.
-- Developed from paired multiplayer logs, decompiled game-code review, and testing by the Rogue
-  Trader modding community.
+- Built with Owlcat Games' Rogue Trader modification template.
+- Developed from paired multiplayer logs, decompiled code review, and community testing.
 - This is an unofficial fan modification. Warhammer 40,000 and related marks belong to Games
   Workshop. Rogue Trader belongs to Owlcat Games.
 

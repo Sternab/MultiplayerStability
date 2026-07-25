@@ -9,8 +9,8 @@
 // The deterministic sim consumers of the same stream (InclemencyController via WeatherController.Tick)
 // run in the simulation tick, never inside this Unity Update, so they are untouched.
 //
-// Peer compatibility: exact parity required. A mixed install does not repair the stream behavior and is
-// unsupported. Post-fix paired captures kept the Weather stream synchronized.
+// The v0.9 compatibility decision enables this stream change only under exact-build parity. Post-fix
+// paired captures kept the Weather stream synchronized.
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;
@@ -29,30 +29,51 @@ namespace MultiplayerStability
                 var update = (type != null) ? AccessTools.Method(type, "Update") : null;
                 if (update == null)
                 {
-                    MultiplayerStabilityMain.Log("[WeatherFix][ERR] VFXWeatherSystem.Update not found; weather RNG fix inactive.");
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[WeatherFix][ERR] VFXWeatherSystem.Update not found; weather RNG fix inactive.");
                     return;
                 }
                 harmony.Patch(update,
                     prefix: new HarmonyMethod(typeof(WeatherRngFix), nameof(Prefix)),
                     finalizer: new HarmonyMethod(typeof(WeatherRngFix), nameof(Finalizer)));
-                MultiplayerStabilityMain.Log("[WeatherFix] VFXWeatherSystem.Update wrapped; hashed Weather stream protected from render-frame drains.");
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[WeatherFix] VFXWeatherSystem.Update wrapper installed; runtime use requires exact parity.");
             }
             catch (Exception e)
             {
-                MultiplayerStabilityMain.Log("[WeatherFix][ERR] wire failed: " + e);
+                MultiplayerStabilityMain.LogNoThrow("[WeatherFix][ERR] wire failed: " + e);
             }
         }
 
         private static void Prefix(out IDisposable __state)
         {
-            __state = ContextData<DisableStatefulRandomContext>.Request();
+            __state = null;
+            if (!MultiplayerCompatibility.SimulationFixesEnabled)
+                return;
+            try
+            {
+                __state = ContextData<DisableStatefulRandomContext>.Request();
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[WeatherFix][ERR] RNG context request failed; vanilla draw path remains: " + e.Message);
+            }
         }
 
-        // Finalizer, not postfix: an unbalanced Request would leave the process-global flag set, making ALL
-        // stateful RNG non-deterministic from then on -- a guaranteed permanent desync.
+        // Finalizer, not postfix: an unbalanced Request can leave the process-global flag set, route
+        // later draws away from hashed streams, and cause a persistent desync.
         private static Exception Finalizer(IDisposable __state, Exception __exception)
         {
-            __state?.Dispose();
+            try
+            {
+                __state?.Dispose();
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[WeatherFix][ERR] RNG context dispose failed; RNG context may remain active: " + e);
+            }
             return __exception;
         }
     }

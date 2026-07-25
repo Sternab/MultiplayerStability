@@ -1,4 +1,4 @@
-// Deterministic ordering for physics-broadphase unit queries (Channel-B audit rank 8).
+// Canonical ordering for physics-broadphase unit queries (Channel-B audit rank 8).
 //
 // EntityBoundsHelper.FindUnitsInRange returns units in raw PhysicsScene2D.OverlapCircle order -- a function
 // of each client's collider creation and toggle history. The order can differ across machines even when
@@ -10,9 +10,10 @@
 // the-warp damage lands on different entities while every RNG stream remains synchronized (structurally
 // invisible to the LeakDetector). The ricochet candidate list and crossfire iteration ride the same order.
 //
-// Fix: one postfix applying the engine's own ByIdComparison (UniqueId ordinal -- the cross-machine-identical
-// key) to FindUnitsInRange results in multiplayer. Pure reordering: membership unchanged, uniform Random
-// distribution identical, count-only/iterate-all callers unaffected. Solo untouched (gated), fail-open.
+// Fix: one postfix applies the engine's own ByIdComparison to FindUnitsInRange results under the
+// exact-build latch. It canonicalizes order only when both peers discovered the same members. Collider
+// creation/toggle history can also change membership; this patch does not repair that deeper physics
+// candidate-set risk. Solo, unresolved, and mixed sessions are untouched.
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -33,19 +34,24 @@ namespace MultiplayerStability
         {
             try
             {
-                if (!NetworkingManager.IsMultiplayer || __result == null || __result.Count < 2)
+                if (!MultiplayerCompatibility.SimulationFixesEnabled
+                    || __result == null
+                    || __result.Count < 2)
                     return;
                 // Comparison<Entity> is contravariant, so the engine's own comparer applies directly.
                 __result.Sort(MechanicEntityHelper.ByIdComparison);
                 if (!s_loggedActive)
                 {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[OrderFix] Active; equal-member FindUnitsInRange results sort by UniqueId.");
                     s_loggedActive = true;
-                    MultiplayerStabilityMain.Log("[OrderFix] Active -- FindUnitsInRange results sorted by UniqueId in multiplayer.");
                 }
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                // fail-open: unsorted = vanilla behaviour
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[OrderFix][ERR] result sort failed; caller receives the list in its current state: "
+                    + e.Message);
             }
         }
     }

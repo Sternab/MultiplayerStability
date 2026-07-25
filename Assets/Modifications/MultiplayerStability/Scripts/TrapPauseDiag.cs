@@ -164,15 +164,17 @@ namespace MultiplayerStability
                 }
                 catch (Exception e)
                 {
-                    MultiplayerStabilityMain.Log("[TrapFix][ERR] m_Orientation not resolvable -- containment declined, vanilla stands: " + e.Message);
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[TrapFix][ERR] m_Orientation not resolvable; containment declined: "
+                        + e.Message);
                     return false;                                // patch not applied at all
                 }
             }
 
             private static bool Prefix(AbstractUnitEntity __instance)
             {
-                if (!NetworkingManager.IsMultiplayer || s_reflectionDrift)
-                    return true;                                 // solo, or drift-latched: vanilla exactly
+                if (!MultiplayerCompatibility.SimulationFixesEnabled || s_reflectionDrift)
+                    return true;                                 // vanilla gate, or drift-latched
                 object grounder = null;
                 MethodInfo reset = null;
                 try
@@ -246,13 +248,9 @@ namespace MultiplayerStability
             private static bool Drift(string member)
             {
                 s_reflectionDrift = true;
-                try
-                {
-                    MultiplayerStabilityMain.Log("[TrapFix][ERR] reflection drift (" + member + " not found) -- containment disabled, vanilla stands.");
-                }
-                catch (Exception)
-                {
-                }
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[TrapFix][ERR] reflection drift (" + member
+                    + " not found); containment disabled, vanilla stands.");
                 return true;                                     // this call and all future calls: vanilla
             }
 
@@ -264,8 +262,8 @@ namespace MultiplayerStability
                 {
                     if (s_loggedActive)
                         return;
-                    s_loggedActive = true;
                     MultiplayerStabilityMain.Log("[TrapFix] Containment active -- a missing paused-facing IK graph no longer aborts the command batch with an NRE.");
+                    s_loggedActive = true;
                 }
                 catch (Exception)
                 {
