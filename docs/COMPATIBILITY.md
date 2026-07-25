@@ -3,7 +3,7 @@
 ## Game builds
 
 Developed and **field-tested against Warhammer 40,000: Rogue Trader `1.6.1.514` (Steam)** with the
-reference assemblies hashed in `HANDOFF-MANIFEST.md`. Patch installation is best-effort and per
+reference assemblies hashed in `RELEASE-0.8.32.md`. Patch installation is best-effort and per
 patch class: after a game patch, a missing target logs `[Init][ERR]` / `[ERR] ... not found` /
 `PATTERN NOT FOUND` at boot and the affected patch class stays inert while the rest continue — a
 component spanning several classes can be left partially active (`KNOWN-LIMITATIONS.md`). **Check

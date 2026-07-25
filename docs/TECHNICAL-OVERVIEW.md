@@ -7,10 +7,10 @@ One page. Everything else links from here.
 A field-driven investigation of Rogue Trader co-op desyncs, packaged as an OwlcatModification
 (Harmony). Across instrumented two- and three-player sessions it identified, and where safely
 possible fixed, systematic violations of the lockstep contract: client-local state reaching the
-synchronized simulation. **v0.8.32 is the review artifact, built from the tagged source**; this
-exact build has not completed post-fix field validation.
+synchronized simulation. **v0.8.32 is the current release, built from tag `v0.8.32`**; that build has not completed post-fix
+field validation.
 Per-component validation status is tracked individually in `PATCH-CATALOG.md`;
-`HANDOFF-MANIFEST.md` holds the exact artifact identity.
+`RELEASE-0.8.32.md` holds the exact artifact identity.
 
 ## The one-sentence thesis
 
@@ -69,4 +69,4 @@ in that series.
 ## Contact
 
 Author: **Sternab** (mod author / field-test lead). Repository commits and package checksums in
-`HANDOFF-MANIFEST.md` are the canonical identity for any question about "which build."
+`RELEASE-0.8.32.md` are the canonical identity for any question about "which build."

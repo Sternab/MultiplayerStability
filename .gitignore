@@ -21,3 +21,10 @@ Mod Build Logs*/
 # Python bytecode from running the tools/
 __pycache__/
 *.pyc
+
+# Never commit capture archives, vendored third-party source, or bundles.
+*.bundle
+FasterLoadingTimes-main/
+research/
+**/Mod Build Logs*/
+**/GameLogFull*.txt

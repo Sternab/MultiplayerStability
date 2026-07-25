@@ -5,9 +5,8 @@ three-sided) `GameLogFull` pairs held **outside** Git by the field-test lead; sa
 where useful. *Direct observation* means the mechanism was read from capture data; *source inference*
 means it was established from the decompiled implementation and is marked as such.
 
-For the strongest convictions, `EVIDENCE-EXCERPTS.md` in the companion investigation repository
-(shipped alongside this one in the handoff package) carries verbatim log extracts plus the SHA-256 of
-every raw capture file, so those claims are auditable without the multi-GB logs.
+For the strongest convictions, `investigation/EVIDENCE-EXCERPTS.md` carries verbatim log extracts plus
+the SHA-256 of every raw capture file, so those claims are auditable without the multi-GB logs.
 
 Statuses match `PATCH-CATALOG.md` (strict vocabulary).
 
@@ -37,7 +36,7 @@ Statuses match `PATCH-CATALOG.md` (strict vocabulary).
 | E22 | Combat-exit desync near weather | end of fight in veil-affected area | `player` then `randomState`; one peer one `Weather` draw ahead | draw-count skew at `HandlePartyCombatStateChanged` (direct); gating predicate unknown | capture "0.8.17 SECOND" | combat-exit inclemency path (visual `IsProfileOverriden` among gates) | none yet — C19 diagnostic armed | n/a | which gating input differed |
 | E23 | No user-visible symptom convicted; closed by source inference | dash-through abilities (Macabre Dance, Charge) | n/a | delivery polls the caster's live mid-dash **view** position per frame, so a target can be missed on one peer forever (source inference) | — | `AbilityCustomDirectMovement.HandleNecessaryTargets` | C09 v0.8.x | pending — no post-fix capture has exercised dash delivery specifically | delivery-tick skew stays count-equal but is not proven harmless (see C23) |
 | E24 | No user-visible symptom convicted; closed by source inference | hidden AI turns; local slow-mo keybind | n/a | two client-local writers of `PlayerTimeScale`, which scales the 50 ms step into hashed `GameTime` (source inference) | — | `TurnController.SetTime`, `UnpauseController.Tick` | C13 v0.8.15 | pending — no `GameTime` fork since, but no capture isolates this site | withdrawn frustum substitution documented in-file |
-| E25 | No user-visible symptom convicted; closed by source inference | Psychic Phenomena / ricochet / crossfire victim picks | n/a | `FindUnitsInRange` returns physics-broadphase order (collider creation/toggle history is client-local), so one hashed draw resolves to different victims per peer; streams stay in-hash and the divergence is invisible to RNG diagnostics (source inference) | — | `EntityBoundsHelper.FindUnitsInRange` | C14 v0.8.x | pending | supersedes the 2026-07-02 "refuted" entry in the investigation's `DESYNC-HAZARDS.md` |
+| E25 | No user-visible symptom convicted; closed by source inference | Psychic Phenomena / ricochet / crossfire victim picks | n/a | `FindUnitsInRange` returns physics-broadphase order (collider creation/toggle history is client-local), so one hashed draw resolves to different victims per peer; streams stay in-hash and the divergence is invisible to RNG diagnostics (source inference) | — | `EntityBoundsHelper.FindUnitsInRange` | C14 v0.8.x | pending | supersedes the 2026-07-02 "refuted" entry in the investigation's `investigation/DESYNC-HAZARDS.md` |
 
 ## Notes on language discipline
 

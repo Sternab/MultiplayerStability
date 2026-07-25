@@ -16,7 +16,7 @@
    statement. Used for the `v0.8.32..HEAD` delta this package ships.
 3. **Package verification** — `tools/verify-package.ps1`: manifest version, DLL presence/freshness,
    required folders (including `Blueprints/`), and SHA-256 comparison against
-   `HANDOFF-MANIFEST.md`.
+   `RELEASE-0.8.32.md`.
 4. **Boot self-verification** — the mod reports its own health at startup: per-class patch isolation
    (`[Init] Patches applied (N classes)`, any failure named with `[Init][ERR]` while other components
    continue), per-transpiler swap counts, loud `PATTERN NOT FOUND` on IL drift, and runtime arming
