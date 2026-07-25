@@ -9,15 +9,17 @@ fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 | Item | Value |
 |---|---|
 | Mod source: build tag | `3ab7a4a` = tag `v0.8.32` — the exact source the packaged DLL was built from |
-| Mod source: review head | `2a935b5` plus this identity-stamp commit — a committed file cannot
-  contain its own commit hash, so the resolved head is stamped at packaging time in
-  `SNAPSHOT-COMMIT.txt` and the outer `README-HANDOFF.md`. Delta from the build tag is documentation
-  and comments only — reproduce with `python tools/verify-comments-only.py` from a checkout of this
-  repository (it tokenizes every changed `.cs` file and compares the comment-stripped forms) |
+| Mod source: review head | resolved at packaging time — see `SNAPSHOT-COMMIT.txt` in this folder and the outer `README-HANDOFF.md` (a committed file cannot contain its own commit hash) |
 | Docs repository: build tag | `bb678d1` = tag `docs-v0.8.32` |
-| Docs repository: review head | `03fd08f` (documentation-only ahead of its build tag) |
+| Docs repository: review head | `3c8ba3d` (ahead of its build tag by documentation only) |
 | Manifest `UniqueName` / `Version` | `MultiplayerStability` / `0.8.32` |
 | Source files | 25 `.cs` (23 numbered components) + Unity `.meta`, manifest, localization, docs |
+
+**Delta from the build tag to the review head:** no commit after `v0.8.32` changes any executable
+C# statement. The delta is documentation, source comments, the three tools under `tools/`, a
+`Content/README.txt` placeholder, `.gitignore`, and the `LICENSE` attribution line. The C# half is
+reproducible in a checkout of the mod repository with `python tools/verify-comments-only.py`; for a
+recipient holding only this snapshot, the tag-to-head diff is available on request.
 
 ## Build environment
 
@@ -27,8 +29,8 @@ fixes are still awaiting post-fix validation (`KNOWN-LIMITATIONS.md`).
 | Unity editor | `6000.0.64f1` |
 
 The assemblies the mod compiles against and the target checker reads. **Provenance matters: the
-template's reference assemblies are not byte-identical to the game install's.** All 57 documented
-targets resolve against either set (verified on both, plus the template-shipped original `Code.dll`).
+template's reference assemblies are not byte-identical to the game install's.** All 57 documented target rows (55 patch
+targets plus 2 reflection dependencies the patches call into) resolve against either set (verified on both, plus the template-shipped original `Code.dll`).
 
 | Assembly | Source used here | Bytes | SHA-256 |
 |---|---|---|---|
@@ -68,14 +70,13 @@ review. The packaged DLL above is the authoritative binary.
 
 ## Source file inventory
 
-The authoritative per-file listing with content hashes is produced by:
+The authoritative per-file listing is the delivered snapshot itself. To hash every file in it:
 
-```bash
-git ls-tree -r v0.8.32
+```powershell
+Get-ChildItem -Recurse -File | Get-FileHash -Algorithm SHA256
 ```
 
-in the mod repository (Git blob SHA-1 per file, stable for the tag). `PATCH-CATALOG.md` maps every
-source file to its component, targets, and status.
+`PATCH-CATALOG.md` maps every source file to its component, targets, and status.
 
 ## Verification commands
 

@@ -12,7 +12,9 @@ until the 0.9 latch ships).
 
 Defect-origin classes: **ENGINE** (root cause in engine code; the mod's intervention is a downstream
 workaround) · **DIAG** (diagnostic tooling) · **INFRA** (mod-only infrastructure). Each entry ends
-with a **root-cause note** locating the defect's origin; these are observations, not prescriptions.
+for a convicted defect ends with a **root-cause note** locating its origin; these are observations,
+not prescriptions. Entries whose defect is still open (the log-only diagnostics) state the open
+question instead.
 
 ---
 

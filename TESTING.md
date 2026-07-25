@@ -3,8 +3,8 @@
 ## What verification exists today
 
 1. **Offline target-resolution smoke test** — `tools/check-harmony-targets.py` (metadata-only, no
-   game launch): verifies the documented target set — 57 rows covering all 23 components, including
-   the non-patch reflection dependencies — still exists in the assemblies you pass (standard set in
+   game launch): verifies the documented target set — 57 rows covering all 23 components
+   (55 patch targets plus 2 reflection dependencies the patches call into) — still exists in the assemblies you pass (standard set in
    the tool header). Rows with recorded parameter types are matched against the decoded metadata
    signature; inherited targets are resolved through the base-type chain like `AccessTools.Method`.
    Skipped targets (type in an assembly you did not pass) **fail the run** unless `--allow-skip`;
