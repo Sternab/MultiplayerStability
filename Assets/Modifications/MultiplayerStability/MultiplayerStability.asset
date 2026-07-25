@@ -16,9 +16,9 @@ MonoBehaviour:
     UniqueName: MultiplayerStability
     Version: 0.8.32
     DisplayName: Multiplayer Stability
-    Description: Co-op stability fixes - faster save transfers
+    Description: Co-op desync fixes, diagnostics, and faster save transfers.
     Author: Sternab
-    Repository: 
+    Repository: https://github.com/Sternab/MultiplayerStability
     HomePage: 
     Dependencies: []
   Settings:

@@ -30,7 +30,7 @@
 //      vanilla's own scope hole over CopyItems/CopyFacts/view creation.
 //
 // Solo untouched (all three patches gate on IsMultiplayer). Peer compatibility: exact parity required,
-// like every sim/RNG-changing fix (see the docs/PATCH-CATALOG.md peer-compatibility categories).
+// like every sim/RNG-changing fix (see DESIGN_NOTES.md).
 using System;
 using HarmonyLib;
 using Kingmaker.ElementsSystem.ContextData;

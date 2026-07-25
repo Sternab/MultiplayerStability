@@ -14,7 +14,7 @@
 //
 // Since v0.8.30, multiplayer disables partial-cache reuse by returning null from the prefix.
 // Exact target-checked hits stay cached, unmatched paths recompute, and solo is unchanged. This changes
-// simulation behavior and requires exact parity (see docs/PATCH-CATALOG.md); a mixed install changes which
+// simulation behavior and requires exact parity (see DESIGN_NOTES.md); a mixed install changes which
 // path one peer charges along.
 //
 // The resolution diagnostic remains enabled. Its installation evidence is limited because the

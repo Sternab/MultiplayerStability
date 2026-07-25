@@ -7,8 +7,8 @@
 // camera, render visibility, view bones, UI refresh timing, preview units -- feeding hashed simulation.
 //
 // 23 components across 25 files: prevention fixes, transfer/lobby infrastructure, and
-// log-only diagnostics. docs/PATCH-CATALOG.md is the canonical per-component inventory (targets,
-// rationale, evidence status, and peer-compatibility category); docs/EVIDENCE-MATRIX.md maps claims to captures.
+// log-only diagnostics. The repository-root DESIGN_NOTES.md indexes the components, validation
+// status, compatibility rules, known limitations, and planned hardening work.
 //
 // PEER-COMPATIBILITY (three categories):
 //   Subset-safe:           diagnostics + UI-only fixes + the transfer ack pump (any subset of machines).
@@ -16,18 +16,18 @@
 //                          every-peer-modded and engage only then).
 //   Exact parity required: EVERY RNG- or simulation-changing prevention fix. Until the 0.9
 //                          session-latched compatibility gate ships, run the IDENTICAL build on every
-//                          machine (docs/COMPATIBILITY.md).
+//                          machine (see DESIGN_NOTES.md).
 //
-// Design rules (docs/KNOWN-LIMITATIONS.md has the full statement):
+// Design rules (DESIGN_NOTES.md has the full statement):
 //   - No automatic resync: recovery stays under player control; the mod never forces a reload.
 //   - Best-effort fail-open: patching is isolated per class -- a failed class logs [Init][ERR] and stays
 //     inert while the rest continue, so a component spanning several classes or targets can be left
-//     partially active (docs/KNOWN-LIMITATIONS.md); runtime guards fall back to the vanilla path at their site.
+//     partially active; runtime guards fall back to the vanilla path at their site.
 //   - Solo-safe: simulation-changing behavior is MP-gated; solo play takes the vanilla paths.
 //   - Evidence requirement: prevention fixes require a two-sided capture or a complete engine-source
 //     path that identifies the mechanism.
 //
-// Planned work: docs/ROADMAP-0.9.md. Loading-speed work lives in the separate FasterLoadTimes mod
+// Planned 0.9 hardening is listed in DESIGN_NOTES.md. Loading-speed work lives in the separate FasterLoadTimes mod
 // (not co-op-specific; subset-safe).
 // =====================================================================================================
 using System.Reflection;
@@ -68,7 +68,7 @@ namespace MultiplayerStability
                 {
                     failed++;
                     // "component inert" here means THIS PATCH CLASS is inert; a component built from
-                    // several patch classes can be left partially active (see docs/KNOWN-LIMITATIONS.md).
+                    // several patch classes can be left partially active (see DESIGN_NOTES.md).
                     Log("[Init][ERR] patch class " + type.Name + " failed (component inert, others unaffected): " + e.Message);
                 }
             }
