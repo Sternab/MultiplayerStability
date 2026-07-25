@@ -12,7 +12,8 @@
 // PEER COMPATIBILITY:
 //   Subset-safe: diagnostics, UI-only guards, and the transfer acknowledgement pump.
 //   Epoch-gated: custom protocols and every simulation-changing fix. Before each save-transfer
-//                relaunch, the host distributes one exact-build decision. Incompatible 0.9 peers
+//                relaunch, peers exchange build identity and the save sender distributes one
+//                exact-build decision directly to every other actor. Incompatible 0.9-series peers
 //                select vanilla behavior. Pre-0.9 builds do not honor that decision and remain
 //                unsupported in mixed-version sessions.
 //

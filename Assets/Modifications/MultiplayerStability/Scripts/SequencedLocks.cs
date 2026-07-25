@@ -8,7 +8,8 @@
 // retransmitted once per second. A malformed/mixed packet, internal failure, or 30-second timeout sends
 // an explicit epoch ABORT. Peers that receive it clear sequenced state and resume the untouched one-byte
 // vanilla protocol. Delivery still depends on Photon's reliable message path; this is coordinated fallback,
-// not a distributed-consensus guarantee.
+// not a distributed-consensus guarantee. LockNetManager.GetProgress reads the active sequenced group so
+// loading UI retains vanilla's current/target/me display while the custom protocol is active.
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -40,6 +41,7 @@ namespace MultiplayerStability
 
         private static bool s_aborted;
         private static bool s_loggedActive;
+        private static bool s_loggedProgressFailure;
 
         private static long Key(byte point, int sequence)
             => ((long)point << 32) | (uint)sequence;
@@ -161,6 +163,47 @@ namespace MultiplayerStability
             s_lastAnnounce.Clear();
             s_aborted = false;
             MultiplayerStabilityMain.LogNoThrow("[SeqLock] Baseline reset (" + reason + ").");
+        }
+
+        internal static bool TryGetProgress(
+            NetLockPointId pointId,
+            out bool result,
+            out int current,
+            out int target,
+            out bool me)
+        {
+            result = false;
+            current = 0;
+            target = 0;
+            me = false;
+            if (!MultiplayerCompatibility.ProtocolsEnabled || s_aborted)
+                return false;
+
+            try
+            {
+                byte point = (byte)pointId;
+                if (!s_activeSeq.TryGetValue(point, out int sequence))
+                    return false;
+
+                NetPlayerGroup group = Get(Key(point, sequence));
+                NetPlayerGroup ready = NetworkingManager.PlayersReadyMask;
+                current = group.Intersection(ready).Count();
+                target = Mathf.Max(1, ready.Count());
+                me = group.Contains(NetworkingManager.LocalNetPlayer);
+                result = true;
+                return true;
+            }
+            catch (Exception e)
+            {
+                if (!s_loggedProgressFailure)
+                {
+                    s_loggedProgressFailure = true;
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[SeqLock][WARN] progress query failed; vanilla progress remains: "
+                        + e.Message);
+                }
+                return false;
+            }
         }
 
         private static NetPlayerGroup Get(long key)
@@ -293,6 +336,30 @@ namespace MultiplayerStability
     {
         private static bool Prefix(NetPlayer player, ReadOnlySpan<byte> bytes)
             => !SequencedLocks.TryOnReceived(player, bytes);
+    }
+
+    [HarmonyPatch(typeof(LockNetManager), nameof(LockNetManager.GetProgress))]
+    internal static class LockNetManager_GetProgress_Sequenced_Patch
+    {
+        private static bool Prefix(
+            NetLockPointId pointId,
+            ref bool __result,
+            ref int current,
+            ref int target,
+            ref bool me)
+        {
+            if (!SequencedLocks.TryGetProgress(
+                pointId, out bool result, out int progress, out int total, out bool local))
+            {
+                return true;
+            }
+
+            __result = result;
+            current = progress;
+            target = total;
+            me = local;
+            return false;
+        }
     }
 
     [HarmonyPatch(typeof(LockNetManager), nameof(LockNetManager.OnLeave))]

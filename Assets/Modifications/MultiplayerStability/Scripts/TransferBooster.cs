@@ -36,24 +36,25 @@ namespace MultiplayerStability
         private static Timer s_AckPump;
         private static LoadBalancingClient s_PumpClient;
         private static int s_ActiveTransfers;
+        private static int s_Generation;
         private static int s_VanillaChunkBytes;
         private static int s_VanillaStreams;
         private static bool s_Boosted;
         private static SynchronizationContext s_MainContext;
 
-        internal static bool OnTransferStarting(string kind)
+        internal static int OnTransferStarting(string kind)
         {
-            bool started = false;
+            int generation = -1;
             try
             {
                 lock (Sync)
                 {
                     if (SynchronizationContext.Current != null)
                         s_MainContext = SynchronizationContext.Current;
+                    generation = s_Generation;
                     s_ActiveTransfers++;
-                    started = true;
                     if (s_ActiveTransfers > 1)
-                        return true;
+                        return generation;
 
                     bool compatible = MultiplayerCompatibility.ProtocolsEnabled;
                     bool pumpActive = StartAckPumpLocked();
@@ -78,22 +79,24 @@ namespace MultiplayerStability
                     "[Transfer][ERR] booster startup failed; transfer remains vanilla-compatible: "
                     + e.Message);
             }
-            return started;
+            return generation;
         }
 
         // Called from a finalizer so a synchronous throw in UploadSave/DownloadSave (e.g.
         // AlreadyInProgressException) cannot leak the transfer count or the pump.
-        internal static void OnTransferReturned(Task transferTask, Exception exception, string kind)
+        internal static void OnTransferReturned(
+            int generation, Task transferTask, Exception exception, string kind)
         {
             if (exception != null || transferTask == null)
             {
-                OnTransferEnded(kind + " (threw)");
+                OnTransferEnded(generation, kind + " (threw)");
                 return;
             }
             try
             {
                 transferTask.ContinueWith(
                     t => EndOnMainThread(
+                        generation,
                         kind + (t.IsFaulted
                             ? " (faulted)"
                             : t.IsCanceled ? " (canceled)" : " (completed)")),
@@ -103,50 +106,72 @@ namespace MultiplayerStability
             {
                 MultiplayerStabilityMain.LogNoThrow(
                     "[Transfer][ERR] completion continuation failed: " + e.Message);
-                EndOnMainThread(kind + " (continuation failed)");
+                EndOnMainThread(generation, kind + " (continuation failed)");
             }
         }
 
-        private static void EndOnMainThread(string kind)
+        private static void EndOnMainThread(int generation, string kind)
         {
             SynchronizationContext context = s_MainContext;
             if (context == null || ReferenceEquals(context, SynchronizationContext.Current))
             {
-                OnTransferEnded(kind);
+                OnTransferEnded(generation, kind);
                 return;
             }
 
             try
             {
-                context.Post(_ => OnTransferEnded(kind), null);
+                context.Post(_ => OnTransferEnded(generation, kind), null);
             }
             catch (Exception e)
             {
                 MultiplayerStabilityMain.LogNoThrow(
                     "[Transfer][ERR] main-thread restore dispatch failed: " + e.Message);
-                OnTransferEnded(kind);
+                OnTransferEnded(generation, kind);
             }
         }
 
-        private static void OnTransferEnded(string kind)
+        private static void OnTransferEnded(int generation, string kind)
         {
             lock (Sync)
             {
+                // A room reset advances the generation. Late continuations from the old room must not
+                // decrement a transfer that started after the reset.
+                if (generation != s_Generation)
+                    return;
                 if (s_ActiveTransfers > 0)
                     s_ActiveTransfers--;
                 if (s_ActiveTransfers > 0)
                     return;
 
-                if (s_Boosted)
-                {
-                    SaveMetaData.MaxPacketSize = s_VanillaChunkBytes;
-                    StreamsController.DefaultStreamsCount = s_VanillaStreams;
-                    s_Boosted = false;
-                }
+                RestoreVanillaValuesLocked();
                 StopAckPumpLocked();
                 MultiplayerStabilityMain.LogNoThrow(
                     "[Transfer] " + kind + "; vanilla values restored, ack pump stopped.");
             }
+        }
+
+        internal static void ResetSession(string reason)
+        {
+            lock (Sync)
+            {
+                s_Generation++;
+                s_ActiveTransfers = 0;
+                RestoreVanillaValuesLocked();
+                StopAckPumpLocked();
+                s_MainContext = SynchronizationContext.Current;
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer] Booster state reset (" + reason + ").");
+            }
+        }
+
+        private static void RestoreVanillaValuesLocked()
+        {
+            if (!s_Boosted)
+                return;
+            SaveMetaData.MaxPacketSize = s_VanillaChunkBytes;
+            StreamsController.DefaultStreamsCount = s_VanillaStreams;
+            s_Boosted = false;
         }
 
         private static bool StartAckPumpLocked()
@@ -197,26 +222,42 @@ namespace MultiplayerStability
     [HarmonyPatch(typeof(SaveNetManager), nameof(SaveNetManager.UploadSave))]
     internal static class SaveNetManager_UploadSave_Boost_Patch
     {
-        private static void Prefix(out bool __state)
+        // Nullable keeps the skipped-prefix default distinct from generation zero when another
+        // high-priority prefix suppresses the original method.
+        private static void Prefix(out int? __state)
             => __state = TransferBooster.OnTransferStarting("upload");
 
-        private static void Finalizer(bool __state, Exception __exception, Task __result)
+        private static void Finalizer(int? __state, Exception __exception, Task __result)
         {
-            if (__state)
-                TransferBooster.OnTransferReturned(__result, __exception, "upload");
+            if (__state.HasValue && __state.Value >= 0)
+                TransferBooster.OnTransferReturned(
+                    __state.Value, __result, __exception, "upload");
         }
     }
 
     [HarmonyPatch(typeof(SaveNetManager), nameof(SaveNetManager.DownloadSave))]
     internal static class SaveNetManager_DownloadSave_Boost_Patch
     {
-        private static void Prefix(out bool __state)
+        private static void Prefix(out int? __state)
             => __state = TransferBooster.OnTransferStarting("download");
 
-        private static void Finalizer(bool __state, Exception __exception, Task __result)
+        private static void Finalizer(int? __state, Exception __exception, Task __result)
         {
-            if (__state)
-                TransferBooster.OnTransferReturned(__result, __exception, "download");
+            if (__state.HasValue && __state.Value >= 0)
+                TransferBooster.OnTransferReturned(
+                    __state.Value, __result, __exception, "download");
         }
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnLeave))]
+    internal static class ModsNetManager_OnLeave_TransferBoosterReset_Patch
+    {
+        private static void Postfix() => TransferBooster.ResetSession("room leave");
+    }
+
+    [HarmonyPatch(typeof(ModsNetManager), nameof(ModsNetManager.OnJoinedLobby))]
+    internal static class ModsNetManager_OnJoinedLobby_TransferBoosterReset_Patch
+    {
+        private static void Prefix() => TransferBooster.ResetSession("joined lobby");
     }
 }

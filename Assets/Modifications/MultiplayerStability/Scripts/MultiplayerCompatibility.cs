@@ -1,11 +1,14 @@
 // Session-latched compatibility gate for simulation-changing patches and custom wire protocols.
 //
-// Peers report their compiled module ID to the room owner while assembling the lobby and after an
-// owner change. At each save-transfer epoch, the uploading host evaluates those reports and the complete
-// Photon mod list, then sends one framed, reliable decision before vanilla sends LoadSave. Downloading
-// peers apply that exact decision at DownloadSave. Mixed or unresolved host data selects vanilla
-// behavior. A failed host send, or a missing or invalid decision when another peer advertises the mod,
-// aborts the load so peers cannot enter play with different policies.
+// Peers exchange their compiled module IDs while assembling the lobby. At each save-transfer epoch,
+// the uploading peer evaluates those reports and the complete Photon mod list, then sends one framed,
+// reliable decision directly to every other peer before vanilla sends LoadSave. Downloading peers apply
+// the decision from the actual save sender at DownloadSave. This preserves vanilla's rule that any peer
+// may start a save and that the lower actor number wins simultaneous starts.
+//
+// Mixed or unresolved sender data selects vanilla behavior. A failed decision send, or a missing or
+// invalid decision when another peer advertises the mod, aborts the load so peers cannot enter play
+// with different policies.
 //
 // This protects modded peers that contain this gate and protocol. Pre-0.9 builds do not honor the
 // decision frame and remain unsupported in mixed-version sessions.
@@ -61,11 +64,13 @@ namespace MultiplayerStability
             Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId;
         private static readonly Dictionary<int, BuildIdentity> s_peerBuilds =
             new Dictionary<int, BuildIdentity>();
+        private static readonly HashSet<int> s_helloRecipients =
+            new HashSet<int>();
+        private static readonly Dictionary<int, PendingDecision> s_pendingDecisions =
+            new Dictionary<int, PendingDecision>();
 
         private static LatchState s_state;
         private static string s_detail = "not evaluated";
-        private static PendingDecision s_pendingDecision;
-        private static int s_lastHelloHost = -1;
 
         private sealed class BuildIdentity
         {
@@ -80,9 +85,9 @@ namespace MultiplayerStability
 
         internal static void Reset(string reason)
         {
-            s_pendingDecision = null;
+            s_pendingDecisions.Clear();
             s_peerBuilds.Clear();
-            s_lastHelloHost = -1;
+            s_helloRecipients.Clear();
             s_state = LatchState.Unknown;
             s_detail = reason;
             MultiplayerStabilityMain.LogNoThrow("[Compat] Reset (" + reason + ").");
@@ -94,9 +99,6 @@ namespace MultiplayerStability
             {
                 var photon = PhotonManager.Instance;
                 if (photon == null || !photon.InRoom)
-                    return;
-                int hostActor = photon.MasterClientId;
-                if (hostActor == photon.LocalClientId || hostActor == s_lastHelloHost)
                     return;
 
                 string version = MultiplayerStabilityMain.Modification?.Manifest?.Version;
@@ -115,12 +117,21 @@ namespace MultiplayerStability
                 WriteUInt16(frame, 21, (ushort)versionBytes.Length);
                 Buffer.BlockCopy(versionBytes, 0, frame, HelloFixedSize, versionBytes.Length);
 
-                if (photon.SendMessageTo(
-                    new PhotonActorNumber(hostActor), ControlCode, frame, 0, frame.Length))
+                int localActor = photon.LocalClientId;
+                var players = photon.AllPlayers;
+                for (int i = 0; i < players.Count; i++)
                 {
-                    s_lastHelloHost = hostActor;
-                    MultiplayerStabilityMain.LogNoThrow(
-                        "[Compat] Build identity sent to room owner.");
+                    int actor = players[i].Player.ActorNumber;
+                    if (actor == localActor || s_helloRecipients.Contains(actor))
+                        continue;
+
+                    if (photon.SendMessageTo(
+                        new PhotonActorNumber(actor), ControlCode, frame, 0, frame.Length))
+                    {
+                        s_helloRecipients.Add(actor);
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[Compat] Build identity sent to actor " + actor + ".");
+                    }
                 }
             }
             catch (Exception e)
@@ -154,9 +165,8 @@ namespace MultiplayerStability
             }
         }
 
-        internal static bool BeginHostTransferEpoch()
+        internal static bool BeginTransferEpoch()
         {
-            s_pendingDecision = null;
             Evaluation evaluation = EvaluateRoster(
                 out string detail,
                 out string localVersion,
@@ -180,14 +190,15 @@ namespace MultiplayerStability
 
             SetState(
                 enabled ? LatchState.Compatible : LatchState.Incompatible,
-                "save upload epoch: host decision distributed; " + detail);
+                "save upload epoch: sender decision distributed; " + detail);
             return true;
         }
 
-        internal static bool ApplyHostTransferEpoch(PhotonActorNumber saveFromPlayer)
+        internal static bool ApplyTransferEpoch(PhotonActorNumber saveFromPlayer)
         {
-            PendingDecision decision = s_pendingDecision;
-            s_pendingDecision = null;
+            int saveSender = saveFromPlayer.ActorNumber;
+            s_pendingDecisions.TryGetValue(saveSender, out PendingDecision decision);
+            s_pendingDecisions.Remove(saveSender);
 
             if (decision == null)
             {
@@ -201,7 +212,7 @@ namespace MultiplayerStability
 
                 SetState(
                     LatchState.Incompatible,
-                    "save download epoch: host does not advertise the mod; vanilla behavior");
+                    "save download epoch: sender does not advertise the mod; vanilla behavior");
                 return true;
             }
 
@@ -220,7 +231,7 @@ namespace MultiplayerStability
                 {
                     SetState(
                         LatchState.Incompatible,
-                        "save download epoch: host selected vanilla behavior");
+                        "save download epoch: sender selected vanilla behavior");
                     return true;
                 }
 
@@ -229,7 +240,7 @@ namespace MultiplayerStability
                 {
                     SetState(
                         LatchState.Incompatible,
-                        "save download epoch: host build " + decision.Version
+                        "save download epoch: sender build " + decision.Version
                         + " differs from local build " + (localVersion ?? "<unknown>"));
                     return false;
                 }
@@ -237,7 +248,7 @@ namespace MultiplayerStability
                 {
                     SetState(
                         LatchState.Incompatible,
-                        "save download epoch: host has a different compiled module");
+                        "save download epoch: sender has a different compiled module");
                     return false;
                 }
 
@@ -246,13 +257,13 @@ namespace MultiplayerStability
                 {
                     SetState(
                         LatchState.Incompatible,
-                        "save download epoch: host roster does not match local roster");
+                        "save download epoch: sender roster does not match local roster");
                     return false;
                 }
 
                 SetState(
                     LatchState.Compatible,
-                    "save download epoch: host enabled exact-build behavior");
+                    "save download epoch: sender enabled exact-build behavior");
                 return true;
             }
             catch (Exception e)
@@ -280,7 +291,7 @@ namespace MultiplayerStability
                         || !photon.GetPlayerProperty(photonPlayer, "m", out ModData[] mods)
                         || mods == null)
                     {
-                        detail = "no host decision and a peer mod list is unresolved";
+                        detail = "no sender decision and a peer mod list is unresolved";
                         return false;
                     }
 
@@ -289,7 +300,7 @@ namespace MultiplayerStability
                         if (mods[j] != null
                             && mods[j].Id == MultiplayerStabilityMain.UniqueName)
                         {
-                            detail = "a peer advertises Multiplayer Stability but no host decision arrived";
+                            detail = "a peer advertises Multiplayer Stability but no sender decision arrived";
                             return false;
                         }
                     }
@@ -300,7 +311,7 @@ namespace MultiplayerStability
             }
             catch (Exception e)
             {
-                detail = "no host decision and fallback validation failed: " + e.Message;
+                detail = "no sender decision and fallback validation failed: " + e.Message;
                 return false;
             }
         }
@@ -459,8 +470,33 @@ namespace MultiplayerStability
                 Buffer.BlockCopy(LocalModuleId.ToByteArray(), 0, frame, 16, 16);
                 Buffer.BlockCopy(versionBytes, 0, frame, DecisionFixedSize, versionBytes.Length);
 
-                return PhotonManager.Instance.SendMessageToOthers(
-                    ControlCode, frame, 0, frame.Length);
+                var photon = PhotonManager.Instance;
+                int localActor = photon.LocalClientId;
+                int sent = 0;
+                var players = photon.AllPlayers;
+                for (int i = 0; i < players.Count; i++)
+                {
+                    int actor = players[i].Player.ActorNumber;
+                    if (actor == localActor)
+                        continue;
+                    if (!photon.SendMessageTo(
+                        new PhotonActorNumber(actor), ControlCode, frame, 0, frame.Length))
+                    {
+                        MultiplayerStabilityMain.LogNoThrow(
+                            "[Compat][ERR] decision send failed for actor " + actor + ".");
+                        return false;
+                    }
+                    sent++;
+                }
+
+                if (sent != playerCount - 1)
+                {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[Compat][ERR] decision target count changed during send (sent "
+                        + sent + ", expected " + (playerCount - 1) + ").");
+                    return false;
+                }
+                return true;
             }
             catch (Exception e)
             {
@@ -505,8 +541,6 @@ namespace MultiplayerStability
             }
 
             var photon = PhotonManager.Instance;
-            if (photon.LocalClientId != photon.MasterClientId)
-                throw new ArgumentException("build hello received by a non-owner");
             if (!photon.ActorNumberToPhotonPlayer(
                 new PhotonActorNumber(actorNumber), out _))
             {
@@ -527,8 +561,8 @@ namespace MultiplayerStability
         internal static void RemovePeer(int actorNumber)
         {
             s_peerBuilds.Remove(actorNumber);
-            if (s_lastHelloHost == actorNumber)
-                s_lastHelloHost = -1;
+            s_helloRecipients.Remove(actorNumber);
+            s_pendingDecisions.Remove(actorNumber);
         }
 
         private static void ReceiveDecision(int actorNumber, ReadOnlySpan<byte> bytes)
@@ -547,11 +581,13 @@ namespace MultiplayerStability
                 throw new ArgumentException("invalid decision version length");
             }
 
-            int masterActor = PhotonManager.Instance.MasterClientId;
-            if (actorNumber != masterActor)
-                throw new ArgumentException("decision sender is not the room owner");
+            if (!PhotonManager.Instance.ActorNumberToPhotonPlayer(
+                new PhotonActorNumber(actorNumber), out _))
+            {
+                throw new ArgumentException("decision sender is not in the room");
+            }
 
-            s_pendingDecision = new PendingDecision
+            var decision = new PendingDecision
             {
                 SenderActor = actorNumber,
                 Enabled = bytes[5] == 1,
@@ -561,11 +597,12 @@ namespace MultiplayerStability
                 PlayerCount = unchecked((int)ReadUInt32(bytes, 8)),
                 RosterHash = ReadUInt32(bytes, 12)
             };
+            s_pendingDecisions[actorNumber] = decision;
 
             MultiplayerStabilityMain.LogNoThrow(
-                "[Compat] Received host decision for " + s_pendingDecision.PlayerCount
-                + " peers: " + (s_pendingDecision.Enabled ? "exact-build behavior" : "vanilla behavior")
-                + ".");
+                "[Compat] Received save decision from actor " + actorNumber + " for "
+                + decision.PlayerCount + " peers: "
+                + (decision.Enabled ? "exact-build behavior" : "vanilla behavior") + ".");
         }
 
         private static void SetState(LatchState state, string detail)
@@ -695,7 +732,7 @@ namespace MultiplayerStability
         {
             if (__instance.InProcess)
                 return true;
-            if (MultiplayerCompatibility.BeginHostTransferEpoch())
+            if (MultiplayerCompatibility.BeginTransferEpoch())
                 return true;
 
             __result = Task.FromException(
@@ -716,12 +753,12 @@ namespace MultiplayerStability
         {
             if (__instance.InProcess)
                 return true;
-            if (MultiplayerCompatibility.ApplyHostTransferEpoch(saveFromPlayer))
+            if (MultiplayerCompatibility.ApplyTransferEpoch(saveFromPlayer))
                 return true;
 
             __result = Task.FromException<SaveNetManager.SaveReceiveData>(
                 new SendMessageFailException(
-                    "Multiplayer Stability could not validate the host compatibility decision."));
+                    "Multiplayer Stability could not validate the save-sender compatibility decision."));
             return false;
         }
     }

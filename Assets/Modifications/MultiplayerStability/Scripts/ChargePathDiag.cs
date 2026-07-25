@@ -20,9 +20,11 @@
 // prefix and postfix live in the same patch class, so silence alone is inconclusive (a failed install
 // removes both). Verification of the fix requires all three: (1) no [Init][ERR] for Partial_Patch at boot,
 // (2) the one-time "[ChargeFix] Active" line, (3) no subsequent "partial-cache" source line in MP.
-// Diagnostics log every charge-path resolution with source (exact-cache / partial-cache / computed),
-// caster, origin/destination, target id+position, and the resolved path's final node (read reflectively --
-// GraphNode lives in the A* assembly). Charges are rare, so every call logs.
+// Diagnostics log the first 64 routine charge-path resolutions per process with source
+// (exact-cache / partial-cache / computed), caster, origin/destination, target id+position, and the
+// resolved path's final node (read reflectively because GraphNode lives in the A* assembly).
+// A partial-cache result while the exact-build fix is active always logs because it is an invariant
+// violation. UI previews can call this path repeatedly, so routine records are bounded.
 using System;
 using System.Collections;
 using System.Reflection;
@@ -39,7 +41,10 @@ namespace MultiplayerStability
 {
     internal static class ChargePathDiag
     {
+        private const int MaxRoutineRecords = 64;
         private static string s_lastSource = "none";
+        private static int s_routineRecords;
+        private static bool s_loggedSuppression;
 
         private static void Note(string source)
         {
@@ -128,6 +133,24 @@ namespace MultiplayerStability
                 {
                     if (!NetworkingManager.IsMultiplayer)
                         return;
+                    bool invariantViolation =
+                        MultiplayerCompatibility.SimulationFixesEnabled
+                        && string.Equals(s_lastSource, "partial-cache", StringComparison.Ordinal);
+                    if (!invariantViolation && s_routineRecords >= MaxRoutineRecords)
+                    {
+                        if (!s_loggedSuppression)
+                        {
+                            s_loggedSuppression = true;
+                            MultiplayerStabilityMain.LogNoThrow(
+                                "[ChargeDiag] Routine path records capped at "
+                                + MaxRoutineRecords
+                                + "; an exact-build partial-cache violation will still log.");
+                        }
+                        return;
+                    }
+                    if (!invariantViolation)
+                        s_routineRecords++;
+
                     var sb = new System.Text.StringBuilder(224);
                     sb.Append("[ChargeDiag] path source=").Append(s_lastSource)
                       .Append(" tick=").Append(Game.Instance.RealTimeController.CurrentNetworkTick)

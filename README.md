@@ -4,9 +4,9 @@ Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.0** for game build **1.6.1.514**.
+The current source is **v0.9.1** for game build **1.6.1.514**.
 
-> **Review build:** v0.9.0 has passed source review and compilation, but has not yet completed a
+> **Review build:** v0.9.1 corrects a field-blocking compatibility send bug in v0.9.0. It requires a
 > post-fix multiplayer field session. Use the same version on every machine and keep save backups.
 
 ## Features
@@ -42,7 +42,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.0.zip` from
+1. Download `MultiplayerStability-0.9.1.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -71,15 +71,16 @@ Do not continue if the line reports `FAILED`, or if any Multiplayer Stability li
 `[Init][ERR]`, `PATTERN NOT FOUND`, or a component `[ERR]`. Patch classes load independently, so one
 startup failure can leave a multi-class component only partly active.
 
-Before a save-transfer launch, peers report their compiled module ID to the room owner. The host
-checks that identity and the advertised manifest version, then sends one reliable compatibility
-decision before the game's `LoadSave` message:
+Before a save-transfer launch, peers exchange their compiled module IDs. The peer that starts the
+save checks those identities and the advertised manifest versions, then sends one reliable
+compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
+are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.0 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching v0.9.1 manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
   0.9 clients;
-- if a peer advertises Multiplayer Stability but the host decision is missing or invalid, the
+- if a peer advertises Multiplayer Stability but the save-sender decision is missing or invalid, the
   client refuses the load rather than enter play with a different policy.
 
 Look for `[Compat] Compatible` on every peer when testing the fixes. Pre-0.9 builds do not understand
@@ -90,7 +91,7 @@ logs are still required.
 ## Known Limitations
 
 - The weather combat-exit path and Tactician momentum remainder are instrumented, not fixed.
-- The charge-path, trap containment, and v0.9 network hardening need post-fix field validation.
+- The charge-path, trap containment, and v0.9.1 network hardening need post-fix field validation.
 - Dash delivery removes view-position timing from target delivery, but local movement completion can
   still select a different tick.
 - Sorting range-query results cannot repair different physics candidate membership.
@@ -98,8 +99,8 @@ logs are still required.
 - Projectile mechanics use entity geometry instead of local view bones. Starship projectile geometry
   has limited field coverage.
 - The augmentation screen omits its client-random bark in multiplayer.
-- A receiver can accept a Steam save and still miss every completion message, causing the host to
-  resend the same save through Photon. The bytes are validated, but the duplicate transfer is slower.
+- The nested-answer "new answers" marker is omitted in exact-parity multiplayer because the vanilla
+  UI query can execute and persist an uncached party skill check. Dialogue progression is unchanged.
 
 Implementation status and evidence are listed in [DESIGN_NOTES.md](DESIGN_NOTES.md).
 
@@ -135,7 +136,11 @@ the next session. Existing saves then use vanilla multiplayer behavior.
 4. Copy `Assets/Modifications/MultiplayerStability` into the template's
    `Assets/Modifications/` folder.
 5. Run `Assets > Modification Tools > Build`.
-6. Verify the packaged manifest version and DLL timestamp before distribution.
+6. Copy `Blueprints/README.txt` from the source tree into the built mod's `Blueprints` folder. The
+   Owlcat build excludes the text placeholder, and an empty ZIP directory may be discarded by an
+   installer.
+7. Verify the packaged manifest version, DLL timestamp, and non-empty `Blueprints` folder before
+   distribution.
 
 The template generates `Generated`; it is intentionally not tracked. No Python tooling is required.
 

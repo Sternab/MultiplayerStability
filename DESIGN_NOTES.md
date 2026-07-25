@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The v0.9.0 source contains 24 components across 26 C# files.
+The v0.9.1 source contains 24 components across 26 C# files.
 
 ## Working Model
 
@@ -31,18 +31,21 @@ This model explains the defects listed below. It is not a claim that every desyn
 
 ### Shared compatibility decision
 
-Lobby mod properties are local observations, not a consensus protocol. v0.9.0 therefore makes one
-host-authored decision at each save-transfer epoch:
+Lobby mod properties are local observations, not a consensus protocol. v0.9.1 therefore makes one
+save-sender decision at each save-transfer epoch:
 
-1. The uploading host reads every peer's Photon mod property.
-2. Peers report their compiled assembly MVID to the room owner.
-3. The host checks manifest version and module identity, then hashes the sorted actor roster.
-4. It sends a reliable `MPSC` decision frame before vanilla sends `LoadSave`.
-5. Downloading peers validate the sender, version, module identity, player count, and roster hash
-   before enabling
-   simulation fixes or custom protocols.
+1. Every peer reads the Photon mod properties and exchanges its compiled assembly MVID with every
+   other peer.
+2. The peer uploading the save checks manifest version and module identity, then hashes the sorted
+   actor roster.
+3. It sends a reliable `MPSC` decision directly to every other actor before vanilla sends
+   `LoadSave`.
+4. Downloading peers validate the sender, version, module identity, player count, and roster hash
+   before enabling simulation fixes or custom protocols.
 
-An incompatible decision disables those behaviors on 0.9 peers. If the host cannot queue the
+Pending decisions are keyed by actor because vanilla permits non-owners to start a save and resolves
+simultaneous starts by actor number. An incompatible decision disables those behaviors on 0.9 peers.
+If the save sender cannot queue the
 decision, it aborts the start attempt. If a client sees the mod on another peer but receives no
 valid decision, it refuses the load. This avoids entering play with different policies.
 
@@ -82,13 +85,13 @@ suppress or replace the game's desync dialog.
 
 | ID | Component | Source | Purpose | Evidence |
 |---|---|---|---|---|
-| C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Distributes one host decision for exact-build simulation and protocol activation. | Source reviewed and compiled; field pending |
-| C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements and uses a larger window only after compatibility approval. | Prior transfer captures; v0.9 gate pending |
-| C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer Photon fallback. | Prior path measured; v0.9 wire pending |
-| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, and transition context. | Diagnostic used in paired captures |
+| C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Exchanges build identity all-to-all and distributes a save-sender decision for exact-build activation. | 0.9.0 failure reproduced; 0.9.1 field pending |
+| C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements, gates the larger window, and resets leases by session generation. | Prior transfer captures; 0.9.1 gate pending |
+| C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer fallback and replayable completion. | Prior path measured; 0.9.1 wire pending |
+| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, transition context, and tags upstream telemetry. | Diagnostic used in paired captures |
 | C05 | Weather RNG | `WeatherRngFix.cs` | Keeps render-loop VFX draws out of the hashed Weather stream. | Field evidence |
 | C06 | Projectile RNG | `ProjectileRngFix.cs` | Removes view-dependent aim-bone draws from the hashed Projectiles stream. | Field evidence |
-| C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, and abort behavior to selected loading barriers. | Prior sequencing evidence; v0.9 retry pending |
+| C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, abort, and progress reporting to selected loading barriers. | Prior sequencing evidence; v0.9.1 retry pending |
 | C08 | Deterministic sleep | `DeterministicSleep.cs` | Replaces local camera census decisions for combat-relevant units and stabilizes corpse state. | Field and performance evidence |
 | C09 | Fog gates | `FogGateFix.cs` | Removes local fog or render visibility terms from six mechanics call sites. | Partial field evidence |
 | C10 | Dash delivery | `DashDeliveryFix.cs` | Defers target delivery until the synchronized charge endpoint is established. | Mechanism confirmed |
@@ -98,7 +101,7 @@ suppress or replace the game's desync dialog.
 | C14 | Local time scale | `LocalTimeScaleFix.cs` | Removes local visibility and pause-bind writes from hashed game time. | Mechanism confirmed |
 | C15 | Deterministic order | `DeterministicOrderFix.cs` | Sorts equal-membership range results before downstream selection. | Mechanism confirmed |
 | C16 | Projectile position | `ProjectilePositionFix.cs` | Uses entity geometry instead of local view bones for projectile mechanics. | Mechanism confirmed; limited field coverage |
-| C17 | Dialogue RNG | `DialogRngFix.cs` | Prevents UI inspection from advancing hashed dialogue RNG. | Field evidence |
+| C17 | Dialogue RNG | `DialogRngFix.cs` | Isolates preview getters and omits a mutating nested-answer UI query in exact-parity multiplayer. | Leak field evidence; no-side-effect policy pending |
 | C18 | Idle animation RNG | `IdleAnimationRngFix.cs` | Routes idle variety through the engine's non-hashed idle stream. | Field evidence |
 | C19 | Action-bar guard | `ActionBarRoleSpamFix.cs` | Skips invalid unitless UI refreshes during join and leave callbacks. | Field evidence |
 | C20 | Weather combat-exit diagnostic | `WeatherCombatExitDiag.cs` | Records the predicates and Weather draws around combat-exit inclemency. | Diagnostic |
@@ -115,9 +118,11 @@ behavior. The table is an index, not a substitute for the implementation.
 ### Compatibility frame
 
 Build reports use Photon code 100 with `MPSH` magic, a protocol version, manifest version, and
-assembly MVID. The compatibility decision uses the same code with `MPSC` magic plus the host's
-decision, version, module identity, player count, and roster hash. Payloads without either magic pass
-through to other handlers.
+assembly MVID. Reports are exchanged all-to-all so any vanilla-authorized save sender can evaluate
+the roster. The compatibility decision uses the same code with `MPSC` magic plus the sender's
+decision, version, module identity, player count, and roster hash. It is sent directly per actor
+before `CloseRoom`; the engine's broadcast target list is empty before that point. Payloads without
+either magic pass through to other handlers.
 
 ### Steam save transport
 
@@ -130,14 +135,17 @@ The v0.9 protocol includes:
 - exact ordered offsets and declared length;
 - SHA-256 validation;
 - completion only after the current `SaveNetManager` download task accepts the bytes;
+- one accepted-transfer tombstone per sender so a repeated query can replay completion after
+  vanilla unregisters the type-24 receiver;
 - NACK, cancellation, idle timeout, and per-peer Photon fallback.
 
 Steam may use a direct route or Steam Datagram Relay. The mod does not assume that a direct IP
 connection is exposed. Prior captures measured roughly 8x faster transfer than the vanilla bulk
 path, but route, save size, and connection quality affect the result.
 
-If the receiver accepts the bytes but all completion frames are lost, the host can resend the save
-through Photon. This is redundant work, not acceptance of unchecked bytes.
+While waiting for completion, the sender repeats the original query every ten seconds. A receiver
+that already accepted the bytes replays COMPLETE from its bounded tombstone, including after
+`DownloadSave` has finished repacking and removed vanilla's type-24 receiver.
 
 ### Sequenced loading barriers
 
@@ -154,8 +162,8 @@ consensus protocol and still depends on Photon's reliable event path.
 - Finally-dead units use `IsDeathRevealed = true` in multiplayer.
 - Projectile mechanics use entity-derived target geometry instead of live view bones.
 - The augmentation screen does not play its client-random bark in multiplayer.
-- UI dialogue inspection can show a local preview result, but only synchronized advancement uses
-  the hashed dialogue stream.
+- The nested-answer "new answers" marker is omitted in exact-parity multiplayer. The underlying
+  query can trigger and persist a party skill check; synchronized answer selection is unchanged.
 
 ## Open Work
 
@@ -200,7 +208,7 @@ clues. It does not support a claim that the sequel broadly fixed lockstep desync
 
 ## Testing and Maintenance
 
-v0.9.0 has been compiled against the Rogue Trader `1.6.1.514` reference set. The aggregate review
+v0.9.1 has been compiled against the Rogue Trader `1.6.1.514` reference set. The aggregate review
 build still requires a two-sided multiplayer session.
 
 For field captures:

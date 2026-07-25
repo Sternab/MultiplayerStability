@@ -1,4 +1,4 @@
-Placeholder so the built mod ships a Blueprints folder. The OwlcatModification loader throws
-DirectoryNotFoundException at apply time when the installed mod has no Blueprints directory
-(harmless for a code-only mod, but noisy in GameLogFull). If a build still omits the folder,
-create an empty "Blueprints" folder inside the installed mod directory.
+Release-package placeholder for the required Blueprints folder. Owlcat's build pipeline excludes
+this text file, so packaging must copy it into Build/MultiplayerStability/Blueprints before creating
+the ZIP. Without a non-empty folder, some installers omit Blueprints and OwlcatModification logs a
+DirectoryNotFoundException while applying this otherwise code-only mod.

@@ -3,6 +3,27 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.1 (hotfix)
+
+- Fixed the 0.9.0 load refusal. The compatibility decision used
+  `PhotonManager.SendMessageToOthers` before `CloseRoom` populated its target list, so the call
+  returned success without sending to either client. Decisions are now sent directly to every peer.
+- Changed build identity exchange from client-to-owner to all-to-all and keyed pending decisions by
+  save sender. This preserves vanilla's ability for a non-owner to start a save and its lower-actor
+  winner when peers start simultaneously.
+- Replaced the answer-tree RNG wrapper with a no-side-effect multiplayer UI policy. The query can
+  trigger and persist an uncached party skill check, so exact-parity multiplayer now omits only the
+  nested-answer marker instead of executing the mutating traversal under local RNG.
+- Added accepted-transfer tombstones and periodic completion queries. A client can replay COMPLETE
+  after repacking has unregistered vanilla's type-24 receiver, avoiding an ambiguous Photon resend.
+- Added generation-based transfer-booster cleanup on lobby join and room leave so abandoned tasks
+  cannot leak or later decrement a new session's transfer count.
+- Restored loading-barrier progress reporting from sequenced state, capped routine charge-path
+  diagnostics at 64 records, and labeled Owlcat's opt-in desync telemetry with the mod version and
+  compatibility state.
+- Documented and enforced a non-empty packaged `Blueprints` folder so installers do not discard it
+  and trigger OwlcatModification's code-only-mod directory warning.
+
 ## 0.9.0 (review build)
 
 - Added peer build reports and a host-authored compatibility decision at each save-transfer epoch.

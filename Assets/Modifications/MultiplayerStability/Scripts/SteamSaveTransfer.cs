@@ -10,6 +10,9 @@
 //   * The receiver enforces a 512 MiB bound, exact ordered offsets, declared length, and SHA-256.
 //   * COMPLETE is sent only after SaveNetManager's current download TCS accepts the verified bytes.
 //     Missing/stale game state, checksum errors, and rejected completion send NACK and use Photon.
+//   * Accepted receives leave a bounded per-sender tombstone. While waiting for COMPLETE, the sender
+//     repeats QUERY with the same transfer ID; a tombstone replays COMPLETE even after DownloadSave
+//     has repacked the file and unregistered vanilla's type-24 receiver.
 //   * Multi-peer uploads fall back only for peers that have not acknowledged completion.
 using System;
 using System.Collections.Generic;
@@ -110,6 +113,8 @@ namespace MultiplayerStability
             new Dictionary<TransferKey, TaskCompletionSource<bool>>();
         private static readonly Dictionary<TransferKey, ulong> s_completeSteamIds =
             new Dictionary<TransferKey, ulong>();
+        private static readonly Dictionary<int, ulong> s_acceptedReceiveIds =
+            new Dictionary<int, ulong>();
 
         private static readonly FieldInfo DownloadTcsField =
             AccessTools.Field(typeof(SaveNetManager), "m_DownloadSaveTcs");
@@ -398,6 +403,18 @@ namespace MultiplayerStability
                     cancellationToken.ThrowIfCancellationRequested();
                     RateTick();
                     waitedMs += 2000;
+                    if (waitedMs < CompleteTimeoutMs && waitedMs % 10000 == 0)
+                    {
+                        // COMPLETE is reliable, but an accepted client may finish DownloadSave and
+                        // unregister vanilla's type-24 receiver before an ambiguous host fallback.
+                        // Repeating QUERY lets its accepted-transfer tombstone replay COMPLETE.
+                        SendControl(
+                            peer.Actor,
+                            MsgQuery,
+                            peer.TransferId,
+                            SteamP2P.LocalSteamId,
+                            NackReason.None);
+                    }
                     if (waitedMs >= CompleteTimeoutMs)
                         throw new TimeoutException("peer completion timeout");
                 }
@@ -501,6 +518,23 @@ namespace MultiplayerStability
             if (!MultiplayerCompatibility.ProtocolsEnabled)
             {
                 SendControl(actor, MsgNack, transferId, SteamP2P.LocalSteamId, NackReason.Incompatible);
+                return;
+            }
+            if (s_acceptedReceiveIds.TryGetValue(actor, out ulong acceptedTransferId)
+                && acceptedTransferId == transferId)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    SendControl(
+                        actor,
+                        MsgComplete,
+                        transferId,
+                        SteamP2P.LocalSteamId,
+                        NackReason.None);
+                }
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Transfer] Replayed completion for accepted transfer " + transferId
+                    + " to actor " + actor + ".");
                 return;
             }
             if (!SteamP2P.Available)
@@ -691,7 +725,9 @@ namespace MultiplayerStability
             {
                 // The game has accepted the bytes and cannot be rolled back. Repeat the small reliable
                 // completion frame so a transient control-send failure is unlikely to make the host time out
-                // and resend the same save over Photon. Duplicate completion frames are idempotent.
+                // and resend the same save over Photon. Keep the latest accepted transfer ID per sender so a
+                // repeated QUERY can replay completion after vanilla's type-24 receiver is unregistered.
+                s_acceptedReceiveIds[recv.HostActor] = recv.TransferId;
                 bool acknowledgementSent = false;
                 for (int i = 0; i < 3; i++)
                 {
@@ -790,6 +826,7 @@ namespace MultiplayerStability
             s_pongWaiters.Clear();
             s_completeWaiters.Clear();
             s_completeSteamIds.Clear();
+            s_acceptedReceiveIds.Clear();
             foreach (ulong steamId in outgoingSteamIds)
             {
                 SteamP2P.DisallowSessionFrom(steamId);

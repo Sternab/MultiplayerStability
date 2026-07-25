@@ -24,8 +24,12 @@
 //     in DisableStatefulRandomContext in multiplayer. The mechanical SelectUnit call
 //     (DialogController.SelectAnswer :745) is untouched and keeps its
 //     synchronized hashed draw.
-//  C. Wrap DialogController.HasNextUnselectedAnswers, a view-only answer-tree inspection path
-//     identified by the Solomorne capture.
+//  C. Suppress DialogController.HasNextUnselectedAnswers in exact-parity multiplayer. Its only
+//     external caller is AnswerVM's "new answers" UI marker, but the traversal is not read-only:
+//     BlueprintAnswer.CanShow can trigger an uncached party skill check, write Player.Dialog,
+//     and run success/failure actions. Running that body under a local RNG context would therefore
+//     trade an RNG-stream fork for a persisted-state fork. Returning false removes only the marker;
+//     synchronized answer selection and dialogue progression are untouched.
 //
 // Guard B, a deterministic first-eligible CueSelection replacement, shipped in v0.8.9-v0.8.14 and
 // was removed in v0.8.15 because it also changed synchronized narrative cue selection.
@@ -105,51 +109,29 @@ namespace MultiplayerStability
         }
     }
 
-    // Guard C (v0.8.20, capture 0.8.19): AnswerVM.UpdateView calls
-    // DialogController.HasNextUnselectedAnswers -> ...Internal -> CueSelection.Select. The public
-    // HasNextUnselectedAnswers(BlueprintAnswer) method is a UI-inspection API whose only external caller
-    // is AnswerVM (:93). Dialog advancement does not use this entry point, so the whole-body wrap does
-    // not change synchronized cue selection.
+    // Guard C: AnswerVM reads this method only to display its "new answers" marker. The traversal calls
+    // BlueprintAnswer.CanShow, which may create a real show-check result in Player.Dialog and run actions
+    // when no result is cached. It is therefore unsafe to execute under DisableStatefulRandomContext.
+    // Exact-parity multiplayer omits the marker and does not run the traversal. Solo, mixed, and unresolved
+    // sessions retain vanilla behavior.
     [HarmonyPatch(typeof(DialogController), nameof(DialogController.HasNextUnselectedAnswers), typeof(BlueprintAnswer))]
-    internal static class DialogController_HasNextUnselectedAnswers_NoHashedDraw_Patch
+    internal static class DialogController_HasNextUnselectedAnswers_NoSideEffects_Patch
     {
         private static bool s_loggedActive;
 
-        private static void Prefix(out IDisposable __state)
+        private static bool Prefix(ref bool __result)
         {
-            __state = null;
-            try
-            {
-                if (!MultiplayerCompatibility.SimulationFixesEnabled)
-                    return;
-                __state = ContextData<DisableStatefulRandomContext>.Request();
-                if (!s_loggedActive)
-                {
-                    MultiplayerStabilityMain.LogNoThrow(
-                        "[DialogRng] Answer-tree inspection guard active under exact-build compatibility.");
-                    s_loggedActive = true;
-                }
-            }
-            catch (Exception e)
-            {
-                MultiplayerStabilityMain.LogNoThrow(
-                    "[DialogRng][ERR] inspection RNG context request failed; vanilla path remains: "
-                    + e.Message);
-            }
-        }
+            if (!MultiplayerCompatibility.SimulationFixesEnabled)
+                return true;
 
-        private static Exception Finalizer(IDisposable __state, Exception __exception)
-        {
-            try
-            {
-                __state?.Dispose();
-            }
-            catch (Exception e)
+            __result = false;
+            if (!s_loggedActive)
             {
                 MultiplayerStabilityMain.LogNoThrow(
-                    "[DialogRng][ERR] RNG context dispose failed; context may remain active: " + e);
+                    "[DialogRng] Mutating answer-tree UI inspection disabled under exact-build compatibility.");
+                s_loggedActive = true;
             }
-            return __exception;
+            return false;
         }
     }
 

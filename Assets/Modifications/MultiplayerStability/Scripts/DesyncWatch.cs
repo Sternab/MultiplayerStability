@@ -9,7 +9,8 @@
 //      affected stream (e.g. Weather advancing per frame);
 //   4. re-arms the once-per-session latch when an episode recovers (~5s of matching hashes), so later
 //      desyncs still notify. While continuously diverged nothing re-fires, so no dialog spam;
-//   5. marks transition-adjacent reports in the log. The vanilla UIDesyncHandler always remains active.
+//   5. marks transition-adjacent reports in the log. The vanilla UIDesyncHandler always remains active;
+//   6. labels Owlcat's opt-in remote desync metadata with the mod version and compatibility state.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -648,5 +649,28 @@ namespace MultiplayerStability
     internal static class ModsNetManager_OnLeave_DesyncWatchReset_Patch
     {
         private static void Postfix() => DesyncWatch.ResetRuntimeState("room leave");
+    }
+
+    // Keep Owlcat's opt-in desync upload active. Adding explicit mod metadata is more useful than
+    // suppressing upstream reports and prevents a modded capture from looking like an unmodified session.
+    [HarmonyPatch(typeof(ReleasePropsCollector), nameof(ReleasePropsCollector.Collect))]
+    internal static class ReleasePropsCollector_MultiplayerStabilityTag_Patch
+    {
+        private static void Postfix(Dictionary<string, string> __result)
+        {
+            try
+            {
+                if (__result == null)
+                    return;
+                __result["mod_multiplayer_stability_version"] =
+                    MultiplayerStabilityMain.Modification?.Manifest?.Version ?? "<unknown>";
+                __result["mod_multiplayer_stability_compatibility"] =
+                    MultiplayerCompatibility.State.ToString();
+            }
+            catch (Exception)
+            {
+                // Telemetry metadata is diagnostic only.
+            }
+        }
     }
 }
