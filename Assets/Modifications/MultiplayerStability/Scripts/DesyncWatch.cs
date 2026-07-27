@@ -10,7 +10,9 @@
 //   4. re-arms the once-per-session latch only after 100 consecutive checks with comparable peer hashes
 //      and no vanilla mismatch callback, so later desyncs notify without repeating one unresolved fork;
 //   5. marks transition-adjacent reports in the log. The vanilla UIDesyncHandler always remains active;
-//   6. labels Owlcat's opt-in remote desync metadata with the mod version and compatibility state.
+//   6. labels Owlcat's opt-in remote desync metadata with the mod version and compatibility state;
+//   7. records every in-tick GlobalUuid caller plus semantic EntityFact attachments so a paired dump can
+//      distinguish raw item, ability, entity, and fact creation paths.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -52,10 +54,11 @@ namespace MultiplayerStability
         private static RandState[] s_prevStates;
         private static int s_lastObservedTick = int.MinValue;
 
-        // Entity/fact-creation attribution: every GlobalUuid draw comes from minting an entity or fact
-        // UniqueId. When GlobalUuid is the diverged stream (different creation COUNT between clients), this
-        // ring names WHICH blueprints were created near the divergence, so the two logs can be diffed to
-        // the exact entity one client made and the other didn't.
+        // GlobalUuid attribution. The stream also mints IDs for ItemEntity, AbilityData, combat groups,
+        // and several other objects, so EntityFact.Attach alone cannot account for every draw. This ring
+        // receives raw call-site records from LeakDetector's Rand.Get prefix and semantic fact-attachment
+        // records from the patch below. A paired diff can therefore identify both the caller and, for facts,
+        // the concrete blueprint and owner.
         private const int UuidRingSize = 1024;
         private static readonly int[] s_uuidRingTick = new int[UuidRingSize];
         private static readonly string[] s_uuidRingWhat = new string[UuidRingSize];
@@ -616,8 +619,13 @@ namespace MultiplayerStability
             DumpUuidRing(aroundTick);
         }
 
-        // Called from a postfix on EntityFact.Attach -- the fact/entity UniqueId mint that draws GlobalUuid.
-        internal static void RecordUuidCreation(string what)
+        internal static void RecordGlobalUuidDraw(string site)
+            => RecordUuidEvent("draw " + site);
+
+        internal static void RecordFactAttachment(string what)
+            => RecordUuidEvent("fact " + what);
+
+        private static void RecordUuidEvent(string what)
         {
             try
             {
@@ -635,7 +643,9 @@ namespace MultiplayerStability
             int n = Math.Min(s_uuidRingCount, UuidRingSize);
             if (n == 0)
                 return;
-            var sb = new StringBuilder("[DesyncWatch] entities/facts created near tick ").Append(aroundTick).Append(':');
+            var sb = new StringBuilder(
+                "[DesyncWatch] GlobalUuid draw sites and fact attachments near tick ")
+                .Append(aroundTick).Append(':');
             // Emit cap high enough that a big combat-start buff shower can't crowd out the entities created
             // in the ticks AFTER it (the divergent one has twice landed just past a 120 cap).
             int emitted = 0;
@@ -668,9 +678,8 @@ namespace MultiplayerStability
         private static void Postfix() => DesyncWatch.AfterCheckHash();
     }
 
-    // Attribution for GlobalUuid divergence: record every fact/entity UniqueId mint (only in MP, only when
-    // the id is freshly created -- not on load/restore). Named by blueprint so the two clients' logs diff
-    // to the exact entity one made and the other didn't.
+    // Semantic supplement for GlobalUuid attribution: name each freshly attached fact by blueprint and
+    // owner. Raw non-fact callers are recorded by LeakDetector at Rand.Get.
     [HarmonyPatch(typeof(EntityFact), nameof(EntityFact.Attach))]
     internal static class EntityFact_Attach_UuidTrace_Patch
     {
@@ -716,7 +725,7 @@ namespace MultiplayerStability
                         ? "@" + ownerEntity.GetType().Name + "#" + (ownerEntity.UniqueId ?? "?")
                         : owner != null ? "@" + owner.GetType().Name : "";
                 }
-                DesyncWatch.RecordUuidCreation((bp != null ? bp.name : "?") + who);
+                DesyncWatch.RecordFactAttachment((bp != null ? bp.name : "?") + who);
             }
             catch (Exception)
             {

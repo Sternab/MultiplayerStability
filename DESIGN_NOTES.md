@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The v0.9.2 source contains 26 components across 28 C# files.
+The v0.9.3 source contains 28 components across 30 C# files.
 
 ## Working Model
 
@@ -89,7 +89,7 @@ suppress or replace the game's desync dialog.
 | C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Exchanges build identity all-to-all and distributes a save-sender decision for exact-build activation. | Three-player v0.9.1 field evidence |
 | C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements, gates the larger window, and resets leases by session generation. | Three-player v0.9.1 field evidence |
 | C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer fallback and replayable completion. | Three-player v0.9.1 field evidence |
-| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, and transition context; re-arms only after sustained matching evidence and tags upstream telemetry. | Diagnostic used in paired captures; recovery change pending |
+| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, transition context, raw UUID callers, and fact attachments; re-arms only after sustained matching evidence and tags upstream telemetry. | Diagnostic used in paired captures; recovery field evidence |
 | C05 | Weather RNG | `WeatherRngFix.cs` | Keeps render-loop VFX draws out of the hashed Weather stream. | Field evidence |
 | C06 | Projectile RNG | `ProjectileRngFix.cs` | Removes view-dependent aim-bone draws from the hashed Projectiles stream. | Field evidence |
 | C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, abort, and progress reporting to selected loading barriers. | Three-player v0.9.1 field evidence |
@@ -97,7 +97,7 @@ suppress or replace the game's desync dialog.
 | C09 | Fog gates | `FogGateFix.cs` | Removes local fog or render visibility terms from six mechanics call sites. | Partial field evidence |
 | C10 | Dash delivery | `DashDeliveryFix.cs` | Defers target delivery until the synchronized charge endpoint is established. | Mechanism confirmed |
 | C11 | Preview ghosts | `PreviewGhostFix.cs` | Isolates preview entities from facts, auras, item-copy UUID draws, and gameplay state. | Multiple field captures |
-| C12 | RNG leak detector | `LeakDetector.cs` | Reports hashed RNG draws outside simulation ticks, capped per stream and call site. | Diagnostic used in captures |
+| C12 | RNG leak detector | `LeakDetector.cs` | Reports hashed RNG draws outside simulation ticks and forwards in-tick GlobalUuid caller identity to DesyncWatch. | Diagnostic used in captures |
 | C13 | Preview rulebook guard | `PreviewRulebookGuard.cs` | Blocks preview owners from the global gameplay event bus. | Field evidence |
 | C14 | Local time scale | `LocalTimeScaleFix.cs` | Removes local visibility and pause-bind writes from hashed game time. | Mechanism confirmed |
 | C15 | Deterministic order | `DeterministicOrderFix.cs` | Sorts equal-membership range results before downstream selection. | Mechanism confirmed |
@@ -112,6 +112,8 @@ suppress or replace the game's desync dialog.
 | C24 | Tactician diagnostic | `TacticianDiag.cs` | Records momentum deltas and the hash-omitted Tactician remainder without creating component data. | Diagnostic |
 | C25 | Cabin achievement reward | `AchievementRewardFix.cs` | Suppresses one local-achievement-gated write to the shared cabin chest. | Mechanism confirmed; post-fix pending |
 | C26 | Proving Ground order | `ProvingGroundOrderFix.cs` | Canonicalizes one all-unit marker pass whose insertion order selected the final replacement-buff context. | Three-player mechanism confirmed; post-fix pending |
+| C27 | Pause consensus | `PauseConsensusFix.cs` | Blocks loading-screen pause requests and evaluates all-player pause against the exact transfer-epoch roster instead of local ActivePlayers. | Paired mechanism confirmed; post-fix pending |
+| C28 | Dialogue answer command | `DialogAnswerCommandFix.cs` | Accepts one synchronized, currently offered answer per cue occurrence instead of silently dropping it on local controller timing. | Paired mechanism confirmed; post-fix pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -166,7 +168,12 @@ consensus protocol and still depends on Photon's reliable event path.
 - Projectile mechanics use entity-derived target geometry instead of live view bones.
 - The augmentation screen does not play its client-random bark in multiplayer.
 - The nested-answer "new answers" marker is omitted in exact-parity multiplayer. The underlying
-  query can trigger and persist a party skill check; synchronized answer selection is unchanged.
+  query can trigger and persist a party skill check.
+- Cooperative pause consensus uses the exact transfer-epoch roster. Local pause requests are ignored
+  while Rogue Trader reports an active loading process or loading screen.
+- A synchronized dialogue answer that is still offered by the current cue is no longer discarded
+  because local `CuePlayScheduled` or cue-update timing differs. Only the first command for that cue
+  occurrence is accepted.
 - The `There Is Only War...` future-playthrough amulet is not granted during multiplayer. Its cabin
   action reads each peer's local platform achievement before writing to shared inventory.
 - The Cyber Eagle's Proving Ground ally markers register in UniqueId order. The same seven vanilla
@@ -179,6 +186,9 @@ consensus protocol and still depends on Photon's reliable event path.
 - Combat-exit weather selection can gate hashed Weather draws on a visual profile override.
 - `MomentumThisCombat` is omitted from the Tactician component hash. The first source of its
   remainder split is not yet proven.
+- Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. One peer consumed an
+  extra in-tick `GlobalUuid` draw during the second use, but the exact caller was outside the old
+  EntityFact-only attribution ring. v0.9.3 records that caller without changing item behavior.
 
 ### Structural limits
 
@@ -210,13 +220,15 @@ intent or final Dark Heresy behavior.
 | All-unit event ordering | All-unit actions remain unsorted and subscribers still execute in insertion order. | The architectural hazard behind C26 remains |
 | Fog mechanics | Local fog reads remain in combat join, awareness, and area-effect paths. | No broad replacement for C09 was found |
 | Tactician | The old component is marked obsolete and its momentum rule handler is removed. | Subsystem retirement, not a portable Rogue Trader patch |
+| Cooperative pause | Local pause requests are rejected while a loading screen is active, but consensus still reads `PlayersReadyMask`. | Direct support for the loading guard; the exact-roster policy addresses the remaining local-mask race |
+| Dialogue answers | `DialogAnswerGameCommand` retains the same `CuePlayScheduled` and cue-tick early returns. | No upstream resolution observed; supports C28's target, not its policy |
 
 The comparison gives direct corroboration for the charge cache change and several maintenance
 clues. It does not support a claim that the sequel broadly fixed lockstep desynchronization.
 
 ## Testing and Maintenance
 
-v0.9.2 targets the Rogue Trader `1.6.1.514` reference set. Its new prevention changes require a
+v0.9.3 targets the Rogue Trader `1.6.1.514` reference set. Its new prevention changes require a
 two-sided multiplayer session.
 
 For field captures:

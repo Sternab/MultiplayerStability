@@ -71,6 +71,9 @@ namespace MultiplayerStability
 
         private static LatchState s_state;
         private static string s_detail = "not evaluated";
+        private static int[] s_epochActors = Array.Empty<int>();
+        private static NetPlayerGroup s_epochPauseParticipants = NetPlayerGroup.Empty;
+        private static bool s_epochPauseParticipantsValid;
 
         private sealed class BuildIdentity
         {
@@ -88,9 +91,17 @@ namespace MultiplayerStability
             s_pendingDecisions.Clear();
             s_peerBuilds.Clear();
             s_helloRecipients.Clear();
+            ClearEpochParticipants();
+            DialogAnswerCommandFix.ResetState();
             s_state = LatchState.Unknown;
             s_detail = reason;
             MultiplayerStabilityMain.LogNoThrow("[Compat] Reset (" + reason + ").");
+        }
+
+        internal static bool TryGetPauseParticipantMask(out NetPlayerGroup participants)
+        {
+            participants = s_epochPauseParticipants;
+            return s_state == LatchState.Compatible && s_epochPauseParticipantsValid;
         }
 
         internal static void TrySendBuildHello()
@@ -147,13 +158,14 @@ namespace MultiplayerStability
                 return;
 
             Evaluation evaluation = EvaluateRoster(
-                out string detail, out _, out _, out _);
+                out string detail, out _, out _, out _, out int[] actors);
             switch (evaluation)
             {
                 case Evaluation.Solo:
                     SetState(LatchState.Solo, "lobby: " + detail);
                     break;
                 case Evaluation.Compatible:
+                    LatchEpochParticipants(actors);
                     SetState(LatchState.Compatible, "lobby: " + detail);
                     break;
                 case Evaluation.Incompatible:
@@ -171,7 +183,8 @@ namespace MultiplayerStability
                 out string detail,
                 out string localVersion,
                 out int playerCount,
-                out uint rosterHash);
+                out uint rosterHash,
+                out int[] actors);
 
             if (evaluation == Evaluation.Solo)
             {
@@ -188,6 +201,8 @@ namespace MultiplayerStability
                 return false;
             }
 
+            if (enabled)
+                LatchEpochParticipants(actors);
             SetState(
                 enabled ? LatchState.Compatible : LatchState.Incompatible,
                 "save upload epoch: sender decision distributed; " + detail);
@@ -252,7 +267,7 @@ namespace MultiplayerStability
                     return false;
                 }
 
-                ComputeRoster(out int playerCount, out uint rosterHash);
+                ComputeRoster(out int playerCount, out uint rosterHash, out int[] actors);
                 if (decision.PlayerCount != playerCount || decision.RosterHash != rosterHash)
                 {
                     SetState(
@@ -261,6 +276,7 @@ namespace MultiplayerStability
                     return false;
                 }
 
+                LatchEpochParticipants(actors);
                 SetState(
                     LatchState.Compatible,
                     "save download epoch: sender enabled exact-build behavior");
@@ -332,11 +348,13 @@ namespace MultiplayerStability
             out string detail,
             out string localVersion,
             out int playerCount,
-            out uint rosterHash)
+            out uint rosterHash,
+            out int[] actors)
         {
             localVersion = MultiplayerStabilityMain.Modification?.Manifest?.Version;
             playerCount = 0;
             rosterHash = 0;
+            actors = Array.Empty<int>();
 
             try
             {
@@ -347,7 +365,7 @@ namespace MultiplayerStability
                     return Evaluation.Unresolved;
                 }
 
-                ComputeRoster(out playerCount, out rosterHash);
+                ComputeRoster(out playerCount, out rosterHash, out actors);
                 if (playerCount < 2)
                 {
                     detail = "one player";
@@ -425,11 +443,12 @@ namespace MultiplayerStability
             }
         }
 
-        private static void ComputeRoster(out int playerCount, out uint rosterHash)
+        private static void ComputeRoster(
+            out int playerCount, out uint rosterHash, out int[] actors)
         {
             var players = PhotonManager.Instance.AllPlayers;
             playerCount = players.Count;
-            var actors = new int[playerCount];
+            actors = new int[playerCount];
             for (int i = 0; i < playerCount; i++)
                 actors[i] = players[i].Player.ActorNumber;
             Array.Sort(actors);
@@ -563,6 +582,23 @@ namespace MultiplayerStability
             s_peerBuilds.Remove(actorNumber);
             s_helloRecipients.Remove(actorNumber);
             s_pendingDecisions.Remove(actorNumber);
+
+            if (!s_epochPauseParticipantsValid)
+                return;
+            int index = Array.IndexOf(s_epochActors, actorNumber);
+            if (index < 0)
+                return;
+            try
+            {
+                s_epochPauseParticipants =
+                    s_epochPauseParticipants.Del(new NetPlayer(index + 1));
+            }
+            catch (Exception e)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Compat][ERR] could not remove departing actor from pause roster; "
+                    + "pause consensus remains conservative: " + e.Message);
+            }
         }
 
         private static void ReceiveDecision(int actorNumber, ReadOnlySpan<byte> bytes)
@@ -611,6 +647,8 @@ namespace MultiplayerStability
                 || !string.Equals(s_detail, detail, StringComparison.Ordinal);
             s_state = state;
             s_detail = detail;
+            if (state != LatchState.Compatible)
+                ClearEpochParticipants();
             if (!changed)
                 return;
 
@@ -646,6 +684,34 @@ namespace MultiplayerStability
                 | (bytes[offset + 1] << 8)
                 | (bytes[offset + 2] << 16)
                 | (bytes[offset + 3] << 24));
+        }
+
+        private static void LatchEpochParticipants(int[] actors)
+        {
+            if (actors == null || actors.Length < 2
+                || actors.Length > NetPlayerGroup.MaxPlayerIndex)
+            {
+                ClearEpochParticipants();
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[Compat][ERR] exact roster cannot be represented as a pause participant mask.");
+                return;
+            }
+
+            var participants = NetPlayerGroup.Offline;
+            for (int i = 0; i < actors.Length; i++)
+                participants = participants.Add(new NetPlayer(i + 1));
+
+            s_epochActors = (int[])actors.Clone();
+            s_epochPauseParticipants = participants;
+            s_epochPauseParticipantsValid = true;
+            DialogAnswerCommandFix.ResetState();
+        }
+
+        private static void ClearEpochParticipants()
+        {
+            s_epochActors = Array.Empty<int>();
+            s_epochPauseParticipants = NetPlayerGroup.Empty;
+            s_epochPauseParticipantsValid = false;
         }
     }
 

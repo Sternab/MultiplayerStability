@@ -14,6 +14,9 @@
 //   - RealTimeController.IsSimulationTick (RealTimeController.cs:334) identifies simulation execution.
 //   - Rand.Get()'s built-in DisableStatefulRandomContext branch (Rand.cs:52) already diverts whitelisted
 //     view-time draws to the non-hashed fallback.
+//   - During simulation ticks, the GlobalUuid Rand alone is forwarded to DesyncWatch's bounded ring with
+//     its managed call site. This closes the attribution gap for ItemEntity, AbilityData, and other UUID
+//     callers that do not pass through EntityFact.Attach.
 //
 // A Harmony prefix reports a main-thread draw when the Rand belongs to a hashed stream, execution is
 // outside a simulation tick, and DisableStatefulRandomContext is not active. The stack identifies the
@@ -48,6 +51,7 @@ namespace MultiplayerStability
         // Reference-identity map: each hashed stream's Rand instance -> its name (Rand does not override
         // Equals/GetHashCode, so the default Dictionary compares by reference -- exactly what we want).
         private static Dictionary<Rand, string> s_hashedStreams;
+        private static Rand s_globalUuidRand;
         private static int s_mainThreadId;
         private static readonly Dictionary<string, int> s_logCount = new Dictionary<string, int>();
         private const int PerSiteCap = 6;
@@ -60,10 +64,16 @@ namespace MultiplayerStability
             {
                 s_mainThreadId = Thread.CurrentThread.ManagedThreadId;
                 s_hashedStreams = new Dictionary<Rand, string>();
+                s_globalUuidRand = null;
                 foreach (var stream in PFStatefulRandom.Serializable)
                 {
                     if (stream != null && stream.Rand != null && !s_hashedStreams.ContainsKey(stream.Rand))
                         s_hashedStreams[stream.Rand] = stream.Name;
+                    if (stream != null && stream.Rand != null
+                        && string.Equals(stream.Name, "GlobalUuid", StringComparison.Ordinal))
+                    {
+                        s_globalUuidRand = stream.Rand;
+                    }
                 }
                 var target = AccessTools.Method(typeof(Rand), nameof(Rand.Get));
                 if (target == null)
@@ -72,6 +82,12 @@ namespace MultiplayerStability
                 harmony.Patch(target, prefix: prefix);
                 MultiplayerStabilityMain.LogNoThrow("[LeakDetector] Armed; watching " + s_hashedStreams.Count
                     + " hashed RNG streams for candidate out-of-tick draws (log-only).");
+                if (s_globalUuidRand == null)
+                {
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[LeakDetector][WARN] GlobalUuid stream not found; in-tick UUID caller "
+                        + "attribution is unavailable.");
+                }
             }
             catch (Exception e)
             {
@@ -80,8 +96,8 @@ namespace MultiplayerStability
             }
         }
 
-        // Prefix on Rand.Get(). HOT PATH: after initialization and the main-thread check,
-        // IsSimulationTick is the near-universal early-out.
+        // Prefix on Rand.Get(). HOT PATH: simulation draws pay one reference comparison against the
+        // GlobalUuid Rand; stack walking occurs only for an actual serialized UUID draw.
         private static void OnRandGet(Rand __instance)
         {
             try
@@ -92,8 +108,21 @@ namespace MultiplayerStability
                     return;                                   // do not touch Game/Unity state from worker threads
                 var game = Game.Instance;
                 var rtc = game != null ? game.RealTimeController : null;
-                if (rtc == null || rtc.IsSimulationTick)
-                    return;                                   // in a sim tick (or pre-game) = deterministic, fine
+                if (rtc == null)
+                    return;
+                if (rtc.IsSimulationTick)
+                {
+                    // GlobalUuid is the one in-tick stream whose caller identity is needed after a
+                    // count fork. Do not record DisableStatefulRandomContext calls: Rand.Get diverts
+                    // those to the non-hashed fallback and the serialized stream does not advance.
+                    if (ReferenceEquals(__instance, s_globalUuidRand)
+                        && NetworkingManager.IsMultiplayer
+                        && !ContextData<DisableStatefulRandomContext>.Current)
+                    {
+                        DesyncWatch.RecordGlobalUuidDraw(DescribeStack());
+                    }
+                    return;
+                }
                 if (ContextData<DisableStatefulRandomContext>.Current)
                     return;                                   // engine already diverts this to the non-hashed fallback
                 // Loading and character-setup callbacks produce a high volume of initialization draws while

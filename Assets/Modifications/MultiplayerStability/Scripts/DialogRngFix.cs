@@ -29,7 +29,8 @@
 //     BlueprintAnswer.CanShow can trigger an uncached party skill check, write Player.Dialog,
 //     and run success/failure actions. Running that body under a local RNG context would therefore
 //     trade an RNG-stream fork for a persisted-state fork. Returning false removes only the marker;
-//     synchronized answer selection and dialogue progression are untouched.
+//     this component does not select an answer. DialogAnswerCommandFix separately stabilizes the
+//     synchronized command's acceptance rules.
 //
 // Guard B, a deterministic first-eligible CueSelection replacement, shipped in v0.8.9-v0.8.14 and
 // was removed in v0.8.15 because it also changed synchronized narrative cue selection.

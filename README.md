@@ -4,11 +4,12 @@ Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.2** for game build **1.6.1.514**.
+The current source is **v0.9.3** for game build **1.6.1.514**.
 
-> **Review build:** v0.9.2 adds fixes for a local-achievement reward fork, Proving Ground
-> replacement-buff ordering, and duplicate desync recovery notifications. Use the same version on
-> every machine and keep save backups.
+> **Review build:** v0.9.3 adds fixes for load-adjacent pause consensus and synchronized dialogue
+> answers that vanilla can discard using local controller state. It also adds exact in-tick
+> `GlobalUuid` caller attribution for the unresolved Medikit class. Use the same version on every
+> machine and keep save backups.
 
 ## Features
 
@@ -43,7 +44,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.2.zip` from
+1. Download `MultiplayerStability-0.9.3.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -77,7 +78,7 @@ save checks those identities and the advertised manifest versions, then sends on
 compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
 are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.2 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching v0.9.3 manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
   0.9 clients;
@@ -92,6 +93,9 @@ logs are still required.
 ## Known Limitations
 
 - The weather combat-exit path and Tactician momentum remainder are instrumented, not fixed.
+- Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. The second included one
+  extra in-tick `GlobalUuid` draw. v0.9.3 records the exact UUID caller but does not alter Medikit
+  behavior until that caller is identified.
 - The achievement-reward and Proving Ground fixes need post-fix field validation.
 - Dash delivery removes view-position timing from target delivery, but local movement completion can
   still select a different tick.
@@ -101,7 +105,8 @@ logs are still required.
   has limited field coverage.
 - The augmentation screen omits its client-random bark in multiplayer.
 - The nested-answer "new answers" marker is omitted in exact-parity multiplayer because the vanilla
-  UI query can execute and persist an uncached party skill check. Dialogue progression is unchanged.
+  UI query can execute and persist an uncached party skill check. Synchronized answer commands use
+  current offered-answer identity instead of vanilla's local transient drop guards.
 - The `There Is Only War...` future-playthrough amulet is not granted while the exact-parity
   multiplayer fixes are active. The vanilla cabin action uses each peer's local platform achievement
   to decide a shared inventory write; solo reward behavior is unchanged.

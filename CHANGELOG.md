@@ -3,6 +3,25 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.3
+
+- Stabilized cooperative pause consensus against the exact actor roster already validated for the
+  save-transfer epoch. Rogue Trader derives `PlayersReadyMask` from each peer's local
+  `ActivePlayers` list; the paired v0.9.2 capture recorded one unmatched accepted Pause transition
+  immediately before a load-adjacent fork.
+- Backported Dark Heresy's loading-screen guard for local pause requests using Rogue Trader's
+  equivalent loading flags. The stable epoch roster also covers the short post-hide interval before
+  local active-player lists converge.
+- Replaced two local transient early returns in `DialogAnswerGameCommand` with semantic acceptance:
+  the answer must still be offered by the current cue, and only the first synchronized answer
+  command for that cue occurrence is accepted. Commands that pass vanilla's guards remain on the
+  vanilla path.
+- Added raw in-tick `GlobalUuid` call-site attribution to DesyncWatch. This closes the diagnostic gap
+  for `ItemEntity`, `AbilityData`, and other UUID callers that do not pass through
+  `EntityFact.Attach`. Medikit behavior is unchanged pending exact caller evidence.
+
+These prevention changes require post-fix multiplayer validation.
+
 ## 0.9.2
 
 - Prevented the `There Is Only War...` cabin reward from branching shared inventory according to
