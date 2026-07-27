@@ -3,6 +3,24 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.2
+
+- Prevented the `There Is Only War...` cabin reward from branching shared inventory according to
+  each peer's local platform achievements. Exact-parity multiplayer now suppresses only the
+  convicted amulet grant; solo and all other achievement and inventory actions remain unchanged.
+- Canonicalized the ally-marker registration order for the Cyber Eagle's Proving Ground feature.
+  Three-player captures showed identical RNG and seven identical replacement-buff applications,
+  but a different final parent context on each peer because the unsorted all-unit order selected a
+  different last marker.
+- Reworked DesyncWatch recovery around explicit hash-comparison evidence. It now requires 100
+  consecutive checks where every synchronized player supplied a hash and vanilla reported no
+  mismatch. A 42-tick gap between mismatch reports can no longer re-arm repeated dialogs and
+  telemetry for one unresolved fork.
+- Recorded the first three-player v0.9.1 field evidence for the corrected compatibility decision,
+  accelerated save transfer, sequenced loading locks, trap containment, and charge-cache guard.
+
+These three new prevention changes require post-fix multiplayer validation.
+
 ## 0.9.1 (hotfix)
 
 - Fixed the 0.9.0 load refusal. The compatibility decision used

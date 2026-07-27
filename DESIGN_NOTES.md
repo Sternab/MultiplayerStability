@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The v0.9.1 source contains 24 components across 26 C# files.
+The v0.9.2 source contains 26 components across 28 C# files.
 
 ## Working Model
 
@@ -31,7 +31,8 @@ This model explains the defects listed below. It is not a claim that every desyn
 
 ### Shared compatibility decision
 
-Lobby mod properties are local observations, not a consensus protocol. v0.9.1 therefore makes one
+Lobby mod properties are local observations, not a consensus protocol. The v0.9 series therefore
+makes one
 save-sender decision at each save-transfer epoch:
 
 1. Every peer reads the Photon mod properties and exchanges its compiled assembly MVID with every
@@ -85,13 +86,13 @@ suppress or replace the game's desync dialog.
 
 | ID | Component | Source | Purpose | Evidence |
 |---|---|---|---|---|
-| C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Exchanges build identity all-to-all and distributes a save-sender decision for exact-build activation. | 0.9.0 failure reproduced; 0.9.1 field pending |
-| C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements, gates the larger window, and resets leases by session generation. | Prior transfer captures; 0.9.1 gate pending |
-| C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer fallback and replayable completion. | Prior path measured; 0.9.1 wire pending |
-| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, transition context, and tags upstream telemetry. | Diagnostic used in paired captures |
+| C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Exchanges build identity all-to-all and distributes a save-sender decision for exact-build activation. | Three-player v0.9.1 field evidence |
+| C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements, gates the larger window, and resets leases by session generation. | Three-player v0.9.1 field evidence |
+| C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer fallback and replayable completion. | Three-player v0.9.1 field evidence |
+| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, and transition context; re-arms only after sustained matching evidence and tags upstream telemetry. | Diagnostic used in paired captures; recovery change pending |
 | C05 | Weather RNG | `WeatherRngFix.cs` | Keeps render-loop VFX draws out of the hashed Weather stream. | Field evidence |
 | C06 | Projectile RNG | `ProjectileRngFix.cs` | Removes view-dependent aim-bone draws from the hashed Projectiles stream. | Field evidence |
-| C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, abort, and progress reporting to selected loading barriers. | Prior sequencing evidence; v0.9.1 retry pending |
+| C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, abort, and progress reporting to selected loading barriers. | Three-player v0.9.1 field evidence |
 | C08 | Deterministic sleep | `DeterministicSleep.cs` | Replaces local camera census decisions for combat-relevant units and stabilizes corpse state. | Field and performance evidence |
 | C09 | Fog gates | `FogGateFix.cs` | Removes local fog or render visibility terms from six mechanics call sites. | Partial field evidence |
 | C10 | Dash delivery | `DashDeliveryFix.cs` | Defers target delivery until the synchronized charge endpoint is established. | Mechanism confirmed |
@@ -105,10 +106,12 @@ suppress or replace the game's desync dialog.
 | C18 | Idle animation RNG | `IdleAnimationRngFix.cs` | Routes idle variety through the engine's non-hashed idle stream. | Field evidence |
 | C19 | Action-bar guard | `ActionBarRoleSpamFix.cs` | Skips invalid unitless UI refreshes during join and leave callbacks. | Field evidence |
 | C20 | Weather combat-exit diagnostic | `WeatherCombatExitDiag.cs` | Records the predicates and Weather draws around combat-exit inclemency. | Diagnostic |
-| C21 | Trap diagnostic and containment | `TrapPauseDiag.cs` | Records paused rotation calls and contains the confirmed null IK reset. | Mechanism confirmed; post-fix field pending |
+| C21 | Trap diagnostic and containment | `TrapPauseDiag.cs` | Records paused rotation calls and contains the confirmed null IK reset. | Three-player field evidence |
 | C22 | Augmentation bark guard | `AugmentationBarkFix.cs` | Stops a client-only bark from writing hashed played-banter state. | Mechanism confirmed |
-| C23 | Charge path fix | `ChargePathDiag.cs` | Disables target-blind partial charge cache reuse while retaining exact hits. | Source confirmed; Dark Heresy corroboration; field pending |
+| C23 | Charge path fix | `ChargePathDiag.cs` | Disables target-blind partial charge cache reuse while retaining exact hits. | Source confirmed; Dark Heresy corroboration; field evidence |
 | C24 | Tactician diagnostic | `TacticianDiag.cs` | Records momentum deltas and the hash-omitted Tactician remainder without creating component data. | Diagnostic |
+| C25 | Cabin achievement reward | `AchievementRewardFix.cs` | Suppresses one local-achievement-gated write to the shared cabin chest. | Mechanism confirmed; post-fix pending |
+| C26 | Proving Ground order | `ProvingGroundOrderFix.cs` | Canonicalizes one all-unit marker pass whose insertion order selected the final replacement-buff context. | Three-player mechanism confirmed; post-fix pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -164,6 +167,10 @@ consensus protocol and still depends on Photon's reliable event path.
 - The augmentation screen does not play its client-random bark in multiplayer.
 - The nested-answer "new answers" marker is omitted in exact-parity multiplayer. The underlying
   query can trigger and persist a party skill check; synchronized answer selection is unchanged.
+- The `There Is Only War...` future-playthrough amulet is not granted during multiplayer. Its cabin
+  action reads each peer's local platform achievement before writing to shared inventory.
+- The Cyber Eagle's Proving Ground ally markers register in UniqueId order. The same seven vanilla
+  bonus applications remain; only their replacement order becomes stable.
 
 ## Open Work
 
@@ -200,6 +207,7 @@ intent or final Dark Heresy behavior.
 | Projectile aim | View-gated `ParticlesSnapMap` selection and hashed projectile RNG remain. | The core C06 risk is still present in the beta snapshot |
 | Dash delivery | Delivery still reads `movementAgent.IsReallyMoving`. | The local completion-tick risk remains |
 | Range ordering | `FindUnitsInRange` remains unsorted while the shape-query sibling sorts. | Supports C15 but does not solve membership differences |
+| All-unit event ordering | All-unit actions remain unsorted and subscribers still execute in insertion order. | The architectural hazard behind C26 remains |
 | Fog mechanics | Local fog reads remain in combat join, awareness, and area-effect paths. | No broad replacement for C09 was found |
 | Tactician | The old component is marked obsolete and its momentum rule handler is removed. | Subsystem retirement, not a portable Rogue Trader patch |
 
@@ -208,8 +216,8 @@ clues. It does not support a claim that the sequel broadly fixed lockstep desync
 
 ## Testing and Maintenance
 
-v0.9.1 has been compiled against the Rogue Trader `1.6.1.514` reference set. The aggregate review
-build still requires a two-sided multiplayer session.
+v0.9.2 targets the Rogue Trader `1.6.1.514` reference set. Its new prevention changes require a
+two-sided multiplayer session.
 
 For field captures:
 

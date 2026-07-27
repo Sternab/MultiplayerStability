@@ -7,8 +7,8 @@
 //      hash may match several local ticks, so this attribution never drives player-facing policy;
 //   3. traces which serializable RNG streams advanced each sim tick, so randomState desyncs identify the
 //      affected stream (e.g. Weather advancing per frame);
-//   4. re-arms the once-per-session latch when an episode recovers (~5s of matching hashes), so later
-//      desyncs still notify. While continuously diverged nothing re-fires, so no dialog spam;
+//   4. re-arms the once-per-session latch only after 100 consecutive checks with comparable peer hashes
+//      and no vanilla mismatch callback, so later desyncs notify without repeating one unresolved fork;
 //   5. marks transition-adjacent reports in the log. The vanilla UIDesyncHandler always remains active;
 //   6. labels Owlcat's opt-in remote desync metadata with the mod version and compatibility state.
 using System;
@@ -66,6 +66,10 @@ namespace MultiplayerStability
         private static DateTime s_nextWireAttemptUtc;
         private static bool s_hadDesync;
         private static bool s_rearmReflectionErrorLogged;
+        private const int RecoveryMatchingChecks = 100;
+        private static bool s_mismatchObservedThisCheck;
+        private static bool s_comparableHashesThisCheck;
+        private static int s_consecutiveMatchingChecks;
         // Plain negative sentinel: MinValue sentinels overflowed the rate-limit subtraction TWICE (at int
         // width in 0.4.x and again at long width after a refactor), silencing every mismatch log.
         private static long s_lastMismatchLogTick = -1000000;
@@ -244,6 +248,9 @@ namespace MultiplayerStability
             s_prevStates = null;
             s_hadDesync = false;
             s_rearmReflectionErrorLogged = false;
+            s_mismatchObservedThisCheck = false;
+            s_comparableHashesThisCheck = false;
+            s_consecutiveMatchingChecks = 0;
             s_lastMismatchLogTick = -1000000;
             s_lastTransitionTick = -1000000;
             s_lastObservedTick = int.MinValue;
@@ -360,16 +367,44 @@ namespace MultiplayerStability
             }
         }
 
-        // Postfix on SyncStateCheckerController.CheckHash (every sim tick): drives the re-arm edge check.
+        // Prefix/postfix on SyncStateCheckerController.CheckHash. Comparable hashes are sampled before
+        // vanilla's comparison; HandleActorsState marks the exact calls where vanilla found a mismatch.
+        internal static void BeforeCheckHash()
+        {
+            try
+            {
+                s_mismatchObservedThisCheck = false;
+                s_comparableHashesThisCheck = HaveComparablePeerHashes();
+            }
+            catch (Exception)
+            {
+                s_mismatchObservedThisCheck = false;
+                s_comparableHashesThisCheck = false;
+            }
+        }
+
         internal static void AfterCheckHash()
         {
             try
             {
-                ReArmOnRecovery();
+                ReArmOnSustainedMatch();
             }
             catch (Exception)
             {
             }
+            finally
+            {
+                s_mismatchObservedThisCheck = false;
+                s_comparableHashesThisCheck = false;
+            }
+        }
+
+        // HandleActorsState has one caller in this game build: CheckHash's confirmed mismatch branch.
+        // Mark it in a prefix so a failure inside downstream reporting cannot be mistaken for recovery.
+        internal static void OnMismatchObserved()
+        {
+            s_mismatchObservedThisCheck = true;
+            s_consecutiveMatchingChecks = 0;
         }
 
         // Postfix on SyncNetManager.HandleActorsState -- vanilla's CheckHash calls it exactly and only when
@@ -452,56 +487,111 @@ namespace MultiplayerStability
                 + " local match" + (matches == 1 ? "" : "es") + ", sender tick unavailable)";
         }
 
-        // Vanilla latches WasDesync for the whole session after the first serious desync. Once an episode
-        // recovers (HasDesync self-clears after ~100 matching ticks), clear the latch and the window ticks
-        // so the NEXT episode notifies again. No spam: HasDesync stays true while continuously diverged.
-        private static void ReArmOnRecovery()
+        private static bool HaveComparablePeerHashes()
+        {
+            var players = Game.Instance.SynchronizedDataController.SynchronizedData.Players;
+            int playerCount = 0;
+            foreach (var pc in players)
+            {
+                playerCount++;
+                bool haveHash = false;
+                foreach (var sd in pc.Commands)
+                {
+                    if (!sd.IsEmpty)
+                    {
+                        haveHash = true;
+                        break;
+                    }
+                }
+
+                if (!haveHash)
+                    return false;
+            }
+
+            return playerCount >= 2;
+        }
+
+        // Vanilla's HasDesync is a report-window predicate, not a recovery signal. ReportState starts a
+        // fresh potential window when two mismatch reports are 42 ticks apart, making HasDesync false
+        // for that call even though the peers remain forked. The v0.9.1 capture hit that exact cadence,
+        // and the old edge check re-armed the dialog three times for one incident.
+        //
+        // Recovery now requires 100 consecutive simulation checks where every synchronized player
+        // supplied a hash and vanilla did not call its sole mismatch handler. Missing/incomplete hash
+        // samples break the streak rather than counting as agreement.
+        private static void ReArmOnSustainedMatch()
         {
             var strat = s_strategy;
             if (strat == null)
                 return;
-            bool has = strat.HasDesync;
-            if (s_hadDesync && !has && strat.WasDesync)
-            {
-                var setter = AccessTools.PropertySetter(
-                    typeof(BaseDesyncDetectionStrategy), "WasDesync");
-                var firstField = AccessTools.Field(strat.GetType(), "m_DesyncTickFirst");
-                var lastField = AccessTools.Field(strat.GetType(), "m_DesyncTickLast");
-                if (setter == null || firstField == null || lastField == null)
-                {
-                    if (!s_rearmReflectionErrorLogged)
-                    {
-                        s_rearmReflectionErrorLogged = true;
-                        MultiplayerStabilityMain.LogNoThrow(
-                            "[DesyncWatch][ERR] recovery latch members not found; later "
-                            + "desync notifications may remain latched.");
-                    }
-                    s_hadDesync = has;
-                    return;
-                }
 
-                try
-                {
-                    setter.Invoke(strat, new object[] { false });
-                    firstField.SetValue(strat, -32768);
-                    lastField.SetValue(strat, -32768);
-                }
-                catch (Exception e)
-                {
-                    if (!s_rearmReflectionErrorLogged)
-                    {
-                        s_rearmReflectionErrorLogged = true;
-                        MultiplayerStabilityMain.LogNoThrow(
-                            "[DesyncWatch][ERR] recovery latch reset failed; later desync "
-                            + "notifications may remain latched: " + e.Message);
-                    }
-                    s_hadDesync = has;
-                    return;
-                }
-                MultiplayerStabilityMain.LogNoThrow(
-                    "[DesyncWatch] Desync episode recovered (hashes matched ~5s); notifications re-armed.");
+            if (s_mismatchObservedThisCheck)
+            {
+                s_consecutiveMatchingChecks = 0;
+                if (strat.HasDesync || strat.WasDesync)
+                    s_hadDesync = true;
+                return;
             }
-            s_hadDesync = has;
+
+            if (strat.WasDesync)
+                s_hadDesync = true;
+
+            if (!s_hadDesync || !strat.WasDesync)
+            {
+                s_consecutiveMatchingChecks = 0;
+                return;
+            }
+
+            if (!s_comparableHashesThisCheck)
+            {
+                s_consecutiveMatchingChecks = 0;
+                return;
+            }
+
+            if (++s_consecutiveMatchingChecks < RecoveryMatchingChecks)
+                return;
+
+            var setter = AccessTools.PropertySetter(
+                typeof(BaseDesyncDetectionStrategy), "WasDesync");
+            var firstField = AccessTools.Field(strat.GetType(), "m_DesyncTickFirst");
+            var lastField = AccessTools.Field(strat.GetType(), "m_DesyncTickLast");
+            if (setter == null || firstField == null || lastField == null)
+            {
+                if (!s_rearmReflectionErrorLogged)
+                {
+                    s_rearmReflectionErrorLogged = true;
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DesyncWatch][ERR] recovery latch members not found; later "
+                        + "desync notifications may remain latched.");
+                }
+                s_consecutiveMatchingChecks = 0;
+                return;
+            }
+
+            try
+            {
+                setter.Invoke(strat, new object[] { false });
+                firstField.SetValue(strat, -32768);
+                lastField.SetValue(strat, -32768);
+            }
+            catch (Exception e)
+            {
+                if (!s_rearmReflectionErrorLogged)
+                {
+                    s_rearmReflectionErrorLogged = true;
+                    MultiplayerStabilityMain.LogNoThrow(
+                        "[DesyncWatch][ERR] recovery latch reset failed; later desync "
+                        + "notifications may remain latched: " + e.Message);
+                }
+                s_consecutiveMatchingChecks = 0;
+                return;
+            }
+
+            s_hadDesync = false;
+            s_consecutiveMatchingChecks = 0;
+            MultiplayerStabilityMain.LogNoThrow(
+                "[DesyncWatch] Desync episode recovered (100 consecutive comparable "
+                + "hash checks matched); notifications re-armed.");
         }
 
         private static void DumpRngRing(int aroundTick)
@@ -574,6 +664,7 @@ namespace MultiplayerStability
     {
         private static System.Reflection.MethodBase TargetMethod()
             => AccessTools.Method(typeof(SyncStateCheckerController), "CheckHash");
+        private static void Prefix() => DesyncWatch.BeforeCheckHash();
         private static void Postfix() => DesyncWatch.AfterCheckHash();
     }
 
@@ -642,6 +733,7 @@ namespace MultiplayerStability
     [HarmonyPatch(typeof(SyncNetManager), nameof(SyncNetManager.HandleActorsState))]
     internal static class SyncNetManager_HandleActorsState_Attribution_Patch
     {
+        private static void Prefix() => DesyncWatch.OnMismatchObserved();
         private static void Postfix() => DesyncWatch.OnMismatchReported();
     }
 
