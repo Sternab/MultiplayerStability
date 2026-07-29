@@ -3,6 +3,15 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.4
+
+- Added ungated, subset-safe UI lifecycle guards for null or disposed units in `SurfaceHUDVM`,
+  `CharInfoExperienceVM`, `InventoryDollAdditionalStatsVM`, and
+  `InventoryDollAdditionalStatsPCView`. The guards remove the exact exception paths recorded on
+  both peers in the paired v0.9.2 folder-3 capture while leaving valid callbacks and simulation
+  behavior unchanged. Their effect on the two associated desync episodes still requires field
+  validation.
+
 ## 0.9.3
 
 - Stabilized cooperative pause consensus against the exact actor roster already validated for the

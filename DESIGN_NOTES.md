@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The v0.9.3 source contains 28 components across 30 C# files.
+The current source contains 29 components across 31 C# files.
 
 ## Working Model
 
@@ -114,6 +114,7 @@ suppress or replace the game's desync dialog.
 | C26 | Proving Ground order | `ProvingGroundOrderFix.cs` | Canonicalizes one all-unit marker pass whose insertion order selected the final replacement-buff context. | Three-player mechanism confirmed; post-fix pending |
 | C27 | Pause consensus | `PauseConsensusFix.cs` | Blocks loading-screen pause requests and evaluates all-player pause against the exact transfer-epoch roster instead of local ActivePlayers. | Paired mechanism confirmed; post-fix pending |
 | C28 | Dialogue answer command | `DialogAnswerCommandFix.cs` | Accepts one synchronized, currently offered answer per cue occurrence instead of silently dropping it on local controller timing. | Paired mechanism confirmed; post-fix pending |
+| C29 | UI lifecycle guards | `UiLifecycleGuards.cs` | Skips null or disposed unit work in four captured Surface HUD, experience, and inventory UI callback paths. | Paired exception evidence; Dark Heresy corroboration; desync effect pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -188,7 +189,7 @@ consensus protocol and still depends on Photon's reliable event path.
   remainder split is not yet proven.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. One peer consumed an
   extra in-tick `GlobalUuid` draw during the second use, but the exact caller was outside the old
-  EntityFact-only attribution ring. v0.9.3 records that caller without changing item behavior.
+  EntityFact-only attribution ring. v0.9.4 records that caller without changing item behavior.
 
 ### Structural limits
 
@@ -222,14 +223,15 @@ intent or final Dark Heresy behavior.
 | Tactician | The old component is marked obsolete and its momentum rule handler is removed. | Subsystem retirement, not a portable Rogue Trader patch |
 | Cooperative pause | Local pause requests are rejected while a loading screen is active, but consensus still reads `PlayersReadyMask`. | Direct support for the loading guard; the exact-roster policy addresses the remaining local-mask race |
 | Dialogue answers | `DialogAnswerGameCommand` retains the same `CuePlayScheduled` and cue-tick early returns. | No upstream resolution observed; supports C28's target, not its policy |
+| UI lifecycle | The newer Surface HUD handles null selection without the Hunt-the-Prey lookup, the experience display checks null/disposed state, and the PC additional-stats view removes the unsafe unit subscription. | Independent support for C29's narrow invalid-lifecycle guards; not proof that the captured exceptions caused a desync |
 
 The comparison gives direct corroboration for the charge cache change and several maintenance
 clues. It does not support a claim that the sequel broadly fixed lockstep desynchronization.
 
 ## Testing and Maintenance
 
-v0.9.3 targets the Rogue Trader `1.6.1.514` reference set. Its new prevention changes require a
-two-sided multiplayer session.
+v0.9.4 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe,
+but their effect on the captured desync episodes still requires a two-sided multiplayer session.
 
 For field captures:
 

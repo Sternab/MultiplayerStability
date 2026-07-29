@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Manifest:
     UniqueName: MultiplayerStability
-    Version: 0.9.3
+    Version: 0.9.4
     DisplayName: Multiplayer Stability
     Description: Co-op desync fixes, diagnostics, and faster save transfers.
     Author: Sternab
