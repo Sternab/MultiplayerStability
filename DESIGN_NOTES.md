@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The current source contains 29 components across 31 C# files.
+The current source contains 30 components across 32 C# files.
 
 ## Working Model
 
@@ -89,7 +89,7 @@ suppress or replace the game's desync dialog.
 | C01 | Compatibility gate | `MultiplayerCompatibility.cs` | Exchanges build identity all-to-all and distributes a save-sender decision for exact-build activation. | Three-player v0.9.1 field evidence |
 | C02 | Transfer booster | `TransferBooster.cs` | Pumps Photon acknowledgements, gates the larger window, and resets leases by session generation. | Three-player v0.9.1 field evidence |
 | C03 | Steam save transfer | `SteamP2P.cs`, `SteamSaveTransfer.cs` | Moves validated bulk save bytes through Steam with per-peer fallback and replayable completion. | Three-player v0.9.1 field evidence |
-| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, entity hashes, transition context, raw UUID callers, and fact attachments; re-arms only after sustained matching evidence and tags upstream telemetry. | Diagnostic used in paired captures; recovery field evidence |
+| C04 | Desync watch | `DesyncWatch.cs` | Records episodes, buckets, RNG state, standalone Player-child and scene-entity hashes, transition context, raw UUID callers, and fact attachments; re-arms only after sustained matching evidence and tags upstream telemetry. | Diagnostic used in paired captures; recovery field evidence |
 | C05 | Weather RNG | `WeatherRngFix.cs` | Keeps render-loop VFX draws out of the hashed Weather stream. | Field evidence |
 | C06 | Projectile RNG | `ProjectileRngFix.cs` | Removes view-dependent aim-bone draws from the hashed Projectiles stream. | Field evidence |
 | C07 | Sequenced locks | `SequencedLocks.cs` | Adds identity, retry, timeout, abort, and progress reporting to selected loading barriers. | Three-player v0.9.1 field evidence |
@@ -114,7 +114,8 @@ suppress or replace the game's desync dialog.
 | C26 | Proving Ground order | `ProvingGroundOrderFix.cs` | Canonicalizes one all-unit marker pass whose insertion order selected the final replacement-buff context. | Three-player mechanism confirmed; post-fix pending |
 | C27 | Pause consensus | `PauseConsensusFix.cs` | Blocks loading-screen pause requests and evaluates all-player pause against the exact transfer-epoch roster instead of local ActivePlayers. | Paired mechanism confirmed; post-fix pending |
 | C28 | Dialogue answer command | `DialogAnswerCommandFix.cs` | Accepts one synchronized, currently offered answer per cue occurrence instead of silently dropping it on local controller timing. | Paired mechanism confirmed; post-fix pending |
-| C29 | UI lifecycle guards | `UiLifecycleGuards.cs` | Skips null or disposed unit work in four captured Surface HUD, experience, and inventory UI callback paths. | Paired exception evidence; Dark Heresy corroboration; desync effect pending |
+| C29 | UI lifecycle guards | `UiLifecycleGuards.cs` | Skips invalid work in five captured Surface HUD, experience, inventory, and vendor-construction UI callback paths. | Paired exception evidence; partial Dark Heresy corroboration; desync effect pending |
+| C30 | Party-pet spawner cleanup | `PartyPetSpawnerFix.cs` | Runs the base spawner cleanup when a disposed party-pet reference no longer resolves, instead of throwing before hashed spawn state is cleared. | Paired exception evidence; post-fix pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -189,7 +190,7 @@ consensus protocol and still depends on Photon's reliable event path.
   remainder split is not yet proven.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. One peer consumed an
   extra in-tick `GlobalUuid` draw during the second use, but the exact caller was outside the old
-  EntityFact-only attribution ring. v0.9.4 records that caller without changing item behavior.
+  EntityFact-only attribution ring. v0.9.5 records that caller without changing item behavior.
 
 ### Structural limits
 
@@ -230,8 +231,9 @@ clues. It does not support a claim that the sequel broadly fixed lockstep desync
 
 ## Testing and Maintenance
 
-v0.9.4 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe,
-but their effect on the captured desync episodes still requires a two-sided multiplayer session.
+v0.9.5 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
+The party-pet cleanup changes hashed lifecycle state and requires exact build parity. Both fixes still
+require a two-sided post-fix multiplayer session.
 
 For field captures:
 

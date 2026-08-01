@@ -12,7 +12,9 @@
 //   5. marks transition-adjacent reports in the log. The vanilla UIDesyncHandler always remains active;
 //   6. labels Owlcat's opt-in remote desync metadata with the mod version and compatibility state;
 //   7. records every in-tick GlobalUuid caller plus semantic EntityFact attachments so a paired dump can
-//      distinguish raw item, ability, entity, and fact creation paths.
+//      distinguish raw item, ability, entity, and fact creation paths;
+//   8. on serious reports, hashes the class-valued child roots used by Player.GetHash128 independently,
+//      alongside the existing standalone scene-entity hashes.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -209,6 +211,91 @@ namespace MultiplayerStability
             }
         }
 
+        // Hash each class-valued child root that the generated Player.GetHash128 method includes. A paired
+        // diff can therefore narrow a player-bucket fork to dialogue, etudes, inventory, weather, timers,
+        // entity parts, or another major subsystem. Inline scalar and collection fields are deliberately
+        // not decomposed here, and these standalone hashes do not concatenate into the aggregate Player
+        // hash. Serious-only invocation bounds both work and log volume.
+        private static void DumpPlayerComponentHashes(HashableState data)
+        {
+            try
+            {
+                Player player = data.player;
+                if (player == null)
+                    return;
+
+                var lines = new List<string>(36);
+                AddPlayerComponentHash(lines, "AiCollectedDataStorage", player.AiCollectedDataStorage);
+                AddPlayerComponentHash(lines, "AugmentationsWindowBlocked", player.AugmentationsWindowBlocked);
+                AddPlayerComponentHash(lines, "CannotAccessContracts", player.CannotAccessContracts);
+                AddPlayerComponentHash(lines, "CargoState", player.CargoState);
+                AddPlayerComponentHash(lines, "CharacterInfoWindowBlocked", player.CharacterInfoWindowBlocked);
+                AddPlayerComponentHash(lines, "ColoniesState", player.ColoniesState);
+                AddPlayerComponentHash(lines, "CombatRandomEncounterState", player.CombatRandomEncounterState);
+                AddPlayerComponentHash(lines, "Combativity", player.Combativity);
+                AddPlayerComponentHash(lines, "CompanionStories", player.CompanionStories);
+                AddPlayerComponentHash(lines, "Dialog", player.Dialog);
+                AddPlayerComponentHash(lines, "EtudesSystem", player.EtudesSystem);
+                AddPlayerComponentHash(lines, "Facts", player.Facts);
+                AddPlayerComponentHash(lines, "GlobalMapRandomGenerationState", player.GlobalMapRandomGenerationState);
+                AddPlayerComponentHash(lines, "InventoryWindowBlocked", player.InventoryWindowBlocked);
+                AddPlayerComponentHash(lines, "MinDifficultyController", player.MinDifficultyController);
+                AddPlayerComponentHash(lines, "PSNObjects", player.PSNObjects);
+                AddPlayerComponentHash(lines, "Parts", player.Parts);
+                AddPlayerComponentHash(lines, "PlayerShip", player.PlayerShip);
+                AddPlayerComponentHash(lines, "ProfitFactor", player.ProfitFactor);
+                AddPlayerComponentHash(lines, "QuestBook", player.QuestBook);
+                AddPlayerComponentHash(lines, "Scrap", player.Scrap);
+                AddPlayerComponentHash(lines, "ServiceWindowsBlocked", player.ServiceWindowsBlocked);
+                AddPlayerComponentHash(lines, "SharedStash", player.SharedStash);
+                AddPlayerComponentHash(lines, "SharedVendorTables", player.SharedVendorTables);
+                AddPlayerComponentHash(lines, "StarSystemsState", player.StarSystemsState);
+                AddPlayerComponentHash(lines, "Timers", player.Timers);
+                AddPlayerComponentHash(lines, "TraumasModification", player.TraumasModification);
+                AddPlayerComponentHash(lines, "UISettings", player.UISettings);
+                AddPlayerComponentHash(lines, "UnlockableFlags", player.UnlockableFlags);
+                AddPlayerComponentHash(lines, "VendorsData", player.VendorsData);
+                AddPlayerComponentHash(lines, "WarpTravelState", player.WarpTravelState);
+                AddPlayerComponentHash(lines, "Weather", player.Weather);
+                AddPlayerComponentHash(lines, "Wind", player.Wind);
+
+                lines.Sort(StringComparer.Ordinal);
+                var sb = new StringBuilder(
+                    "[DesyncWatch] standalone Player child hashes (class-valued generated-hash roots; "
+                    + "inline fields not decomposed):");
+                foreach (string line in lines)
+                    sb.Append("\n  ").Append(line);
+                MultiplayerStabilityMain.LogNoThrow(sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                MultiplayerStabilityMain.LogNoThrow(
+                    "[DesyncWatch][ERR] Player child hash dump: " + ex.Message);
+            }
+            finally
+            {
+                RecursiveReferences.Reset();
+            }
+        }
+
+        private static void AddPlayerComponentHash<T>(List<string> lines, string name, T value)
+            where T : class, IHashable
+        {
+            try
+            {
+                RecursiveReferences.Reset();
+                lines.Add(name + " = " + ClassHasher<T>.GetHash128(value));
+            }
+            catch (Exception ex)
+            {
+                lines.Add(name + " = <ERR " + ex.GetType().Name + ": " + ex.Message + ">");
+            }
+            finally
+            {
+                RecursiveReferences.Reset();
+            }
+        }
+
         private sealed class LoggingDesyncHandler : IDesyncHandler
         {
             internal readonly string m_Kind;
@@ -230,6 +317,7 @@ namespace MultiplayerStability
                     // bound the cost (hashing every entity is a one-off hitch on an already-diverged session).
                     if (m_Kind == "serious")
                     {
+                        DumpPlayerComponentHashes(data);
                         DumpSceneEntityHashes(data);
                         MultiplayerStabilityMain.LogNoThrow(
                             "[DesyncWatch] Vanilla desync dialog remains authoritative; no diagnostic "

@@ -4,12 +4,11 @@ Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.4** for game build **1.6.1.514**.
+The current source is **v0.9.5** for game build **1.6.1.514**.
 
-> **Review build:** v0.9.4 adds narrow UI lifecycle guards for the null and disposed-unit exceptions
-> captured during selection, experience, and inventory updates. It includes the v0.9.3 pause,
-> dialogue-answer, and UUID attribution changes. Use the same version on every machine and keep save
-> backups.
+> **Review build:** v0.9.5 extends the UI lifecycle guards to a vendor-construction callback, repairs
+> unresolved party-pet spawner cleanup in exact-parity multiplayer, and adds bounded Player child
+> hashes to serious desync reports. Use the same version on every machine and keep save backups.
 
 ## Features
 
@@ -17,8 +16,8 @@ The current source is **v0.9.4** for game build **1.6.1.514**.
   synchronized simulation state.
 - Isolates character-preview units from gameplay RNG, facts, auras, UUID allocation, and global
   rulebook subscriptions.
-- Adds desync reports with state buckets, full RNG fingerprints, per-entity hashes, and recent
-  creation history.
+- Adds desync reports with state buckets, full RNG fingerprints, Player child hashes, per-entity
+  hashes, and recent creation history.
 - Uses Steam Networking Messages for bulk save data when exact-build compatibility is confirmed.
   Photon remains the control path and per-peer fallback.
 - Adds framing, transfer identity, size checks, SHA-256 validation, receiver acceptance reporting,
@@ -44,7 +43,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.4.zip` from
+1. Download `MultiplayerStability-0.9.5.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -78,7 +77,7 @@ save checks those identities and the advertised manifest versions, then sends on
 compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
 are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.4 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching v0.9.5 manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
   0.9 clients;
@@ -94,7 +93,7 @@ logs are still required.
 
 - The weather combat-exit path and Tactician momentum remainder are instrumented, not fixed.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. The second included one
-  extra in-tick `GlobalUuid` draw. v0.9.4 records the exact UUID caller but does not alter Medikit
+  extra in-tick `GlobalUuid` draw. v0.9.5 records the exact UUID caller but does not alter Medikit
   behavior until that caller is identified.
 - The achievement-reward and Proving Ground fixes need post-fix field validation.
 - Dash delivery removes view-position timing from target delivery, but local movement completion can

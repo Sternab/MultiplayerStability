@@ -3,6 +3,19 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.5
+
+- Added an ungated vendor construction guard for equipment callbacks received after `VendorVM`
+  subscribes to EventBus but before its constructor assigns `StashVM`. This removes the exact paired
+  exception family recorded in the v0.9.4 long-session logs without changing valid vendor updates.
+- Added an exact-parity party-pet spawner cleanup. When `PartyPetSpawner.MyData.OnDispose` holds a
+  unit reference that no longer resolves, the mod now runs the base spawner `Clear()` path instead
+  of throwing before `HasSpawned` and the serialized reference are cleared. The captured exceptions
+  were symmetric, so their relationship to desync remains a post-fix field question.
+- Added serious-only standalone hashes for the class-valued child roots used by the generated
+  `Player.GetHash128` method. This is bounded diagnostic decomposition for unresolved player-bucket
+  forks; it does not change simulation and does not decompose inline scalar or collection fields.
+
 ## 0.9.4
 
 - Added ungated, subset-safe UI lifecycle guards for null or disposed units in `SurfaceHUDVM`,

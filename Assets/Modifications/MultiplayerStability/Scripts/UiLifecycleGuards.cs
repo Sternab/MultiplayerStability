@@ -1,13 +1,15 @@
 // UI lifecycle guards for exception families recorded on both peers in the paired v0.9.2
-// folder-3 capture.
+// folder-3 capture and the v0.9.4 long-session captures.
 //
 // Rogue Trader keeps several UI subscribers alive while their selected or preview unit is being
-// cleared or disposed. Four invalid callbacks were observed:
+// cleared, disposed, or still under construction. Five invalid callbacks were observed:
 //   1. SurfaceHUDVM.OnUnitChanged passes a null selection to the Hunt-the-Prey dictionary lookup.
 //   2. CharInfoExperienceVM refreshes after its unit has become null or disposed.
 //   3. InventoryDollAdditionalStatsVM refreshes from equipment events after its real or preview
 //      unit has become null or disposed.
 //   4. InventoryDollAdditionalStatsPCView's SetValues subscription dereferences a null unit.
+//   5. VendorVM receives an equipment update after subscribing to EventBus but before its
+//      constructor assigns StashVM.
 //
 // These patches discard only work whose required UI model is already invalid. They are deliberately
 // ungated and subset-safe: no synchronized state is written, valid callbacks keep their complete
@@ -28,6 +30,7 @@ using Kingmaker.Code.UI.MVVM.View.ServiceWindows.Inventory;
 using Kingmaker.Code.UI.MVVM.VM.ServiceWindows.CharacterInfo.Sections.LevelClassScores.Experience;
 using Kingmaker.Code.UI.MVVM.VM.ServiceWindows.Inventory;
 using Kingmaker.Code.UI.MVVM.VM.SurfaceCombat;
+using Kingmaker.Code.UI.MVVM.VM.Vendor;
 using Kingmaker.EntitySystem.Entities;
 
 namespace MultiplayerStability
@@ -159,6 +162,18 @@ namespace MultiplayerStability
         private static bool Prefix(BaseUnitEntity __0)
         {
             return __0 != null;
+        }
+    }
+
+    // VendorVM subscribes to EventBus before raising the full-screen UI event and only assigns
+    // StashVM afterwards. Equipment disposal can re-enter this public handler during that event.
+    // Skip only that half-constructed callback; every callback after construction remains vanilla.
+    [HarmonyPatch(typeof(VendorVM), nameof(VendorVM.HandleEquipmentSlotUpdated))]
+    internal static class VendorVM_Equipment_ConstructionGuard_Patch
+    {
+        private static bool Prefix(VendorVM __instance)
+        {
+            return __instance.StashVM != null;
         }
     }
 }
