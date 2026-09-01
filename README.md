@@ -4,11 +4,12 @@ Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.5** for game build **1.6.1.514**.
+The current source is **v0.9.6** for game build **1.6.1.514**.
 
-> **Review build:** v0.9.5 extends the UI lifecycle guards to a vendor-construction callback, repairs
-> unresolved party-pet spawner cleanup in exact-parity multiplayer, and adds bounded Player child
-> hashes to serious desync reports. Use the same version on every machine and keep save backups.
+> **Review build:** v0.9.6 coalesces concurrent loads of one AssetBundle and canonicalizes
+> `ContextActionOnAllUnitsInCombat` target order. Paired captures identified these defects during
+> FeudalWorld and Lex Imperialis palace play. Use the same version on every machine and keep save
+> backups.
 
 ## Features
 
@@ -43,7 +44,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.5.zip` from
+1. Download `MultiplayerStability-0.9.6.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -77,7 +78,7 @@ save checks those identities and the advertised manifest versions, then sends on
 compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
 are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.5 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching v0.9.6 manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
   0.9 clients;
@@ -95,7 +96,8 @@ logs are still required.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. The second included one
   extra in-tick `GlobalUuid` draw. v0.9.5 records the exact UUID caller but does not alter Medikit
   behavior until that caller is identified.
-- The achievement-reward and Proving Ground fixes need post-fix field validation.
+- The achievement-reward and generalized all-unit combat-order fixes need post-fix field
+  validation. Sorting cannot repair peers that disagree about target membership.
 - Dash delivery removes view-position timing from target delivery, but local movement completion can
   still select a different tick.
 - Sorting range-query results cannot repair different physics candidate membership.

@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The current source contains 30 components across 32 C# files.
+The current source contains 31 components across 33 C# files.
 
 ## Working Model
 
@@ -111,11 +111,12 @@ suppress or replace the game's desync dialog.
 | C23 | Charge path fix | `ChargePathDiag.cs` | Disables target-blind partial charge cache reuse while retaining exact hits. | Source confirmed; Dark Heresy corroboration; field evidence |
 | C24 | Tactician diagnostic | `TacticianDiag.cs` | Records momentum deltas and the hash-omitted Tactician remainder without creating component data. | Diagnostic |
 | C25 | Cabin achievement reward | `AchievementRewardFix.cs` | Suppresses one local-achievement-gated write to the shared cabin chest. | Mechanism confirmed; post-fix pending |
-| C26 | Proving Ground order | `ProvingGroundOrderFix.cs` | Canonicalizes one all-unit marker pass whose insertion order selected the final replacement-buff context. | Three-player mechanism confirmed; post-fix pending |
+| C26 | All-unit combat order | `AllUnitsCombatOrderFix.cs` | Sorts every fully filtered all-unit action list before random selection or sequential side effects. | Proving Ground mechanism confirmed; Lex Imperialis paired evidence; post-fix pending |
 | C27 | Pause consensus | `PauseConsensusFix.cs` | Blocks loading-screen pause requests and evaluates all-player pause against the exact transfer-epoch roster instead of local ActivePlayers. | Paired mechanism confirmed; post-fix pending |
 | C28 | Dialogue answer command | `DialogAnswerCommandFix.cs` | Accepts one synchronized, currently offered answer per cue occurrence instead of silently dropping it on local controller timing. | Paired mechanism confirmed; post-fix pending |
 | C29 | UI lifecycle guards | `UiLifecycleGuards.cs` | Skips invalid work in five captured Surface HUD, experience, inventory, and vendor-construction UI callback paths. | Paired exception evidence; partial Dark Heresy corroboration; desync effect pending |
 | C30 | Party-pet spawner cleanup | `PartyPetSpawnerFix.cs` | Runs the base spawner cleanup when a disposed party-pet reference no longer resolves, instead of throwing before hashed spawn state is cleared. | Paired exception evidence; post-fix pending |
+| C31 | Async bundle-load coalescing | `BundleLoadRaceFix.cs` | Makes concurrent requests for one AssetBundle await the same in-flight task instead of starting a duplicate Unity load. | Three-player mechanism confirmed; Dark Heresy corroboration; post-fix pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -178,8 +179,11 @@ consensus protocol and still depends on Photon's reliable event path.
   occurrence is accepted.
 - The `There Is Only War...` future-playthrough amulet is not granted during multiplayer. Its cabin
   action reads each peer's local platform achievement before writing to shared inventory.
-- The Cyber Eagle's Proving Ground ally markers register in UniqueId order. The same seven vanilla
-  bonus applications remain; only their replacement order becomes stable.
+- Every `ContextActionOnAllUnitsInCombat` pass executes its fully filtered targets in UniqueId
+  order. The same targets and actions remain; only their order becomes stable. This includes the
+  Cyber Eagle's Proving Ground markers and the captured Lex Imperialis DLC buff families.
+- Concurrent async requests for one AssetBundle share the first request while it is in flight. The
+  first caller still executes Rogue Trader's complete loading and dependency path.
 
 ## Open Work
 
@@ -219,21 +223,23 @@ intent or final Dark Heresy behavior.
 | Projectile aim | View-gated `ParticlesSnapMap` selection and hashed projectile RNG remain. | The core C06 risk is still present in the beta snapshot |
 | Dash delivery | Delivery still reads `movementAgent.IsReallyMoving`. | The local completion-tick risk remains |
 | Range ordering | `FindUnitsInRange` remains unsorted while the shape-query sibling sorts. | Supports C15 but does not solve membership differences |
-| All-unit event ordering | All-unit actions remain unsorted and subscribers still execute in insertion order. | The architectural hazard behind C26 remains |
+| All-unit event ordering | All-unit actions remain unsorted and subscribers still execute in insertion order. | Confirms the same architectural hazard remains in the beta; it does not provide an upstream policy for C26 |
 | Fog mechanics | Local fog reads remain in combat join, awareness, and area-effect paths. | No broad replacement for C09 was found |
 | Tactician | The old component is marked obsolete and its momentum rule handler is removed. | Subsystem retirement, not a portable Rogue Trader patch |
 | Cooperative pause | Local pause requests are rejected while a loading screen is active, but consensus still reads `PlayersReadyMask`. | Direct support for the loading guard; the exact-roster policy addresses the remaining local-mask race |
 | Dialogue answers | `DialogAnswerGameCommand` retains the same `CuePlayScheduled` and cue-tick early returns. | No upstream resolution observed; supports C28's target, not its policy |
 | UI lifecycle | The newer Surface HUD handles null selection without the Hunt-the-Prey lookup, the experience display checks null/disposed state, and the PC additional-stats view removes the unsafe unit subscription. | Independent support for C29's narrow invalid-lifecycle guards; not proof that the captured exceptions caused a desync |
+| Async bundle loading | Concurrent requests for one bundle await a shared task through `m_LoadingBundles`. | Direct architectural corroboration for C31 and the captured Rogue Trader race |
 
 The comparison gives direct corroboration for the charge cache change and several maintenance
 clues. It does not support a claim that the sequel broadly fixed lockstep desynchronization.
 
 ## Testing and Maintenance
 
-v0.9.5 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
-The party-pet cleanup changes hashed lifecycle state and requires exact build parity. Both fixes still
-require a two-sided post-fix multiplayer session.
+v0.9.6 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
+The party-pet cleanup, all-unit ordering, and async bundle-load coalescing can change hashed state
+and require exact build parity. The bundle and palace-order fixes still require post-fix multiplayer
+sessions in their captured scenarios.
 
 For field captures:
 

@@ -62,6 +62,7 @@ namespace MultiplayerStability
         // records from the patch below. A paired diff can therefore identify both the caller and, for facts,
         // the concrete blueprint and owner.
         private const int UuidRingSize = 1024;
+        private const int UuidDumpLimit = 700;
         private static readonly int[] s_uuidRingTick = new int[UuidRingSize];
         private static readonly string[] s_uuidRingWhat = new string[UuidRingSize];
         private static int s_uuidRingCount;
@@ -734,10 +735,12 @@ namespace MultiplayerStability
             var sb = new StringBuilder(
                 "[DesyncWatch] GlobalUuid draw sites and fact attachments near tick ")
                 .Append(aroundTick).Append(':');
-            // Emit cap high enough that a big combat-start buff shower can't crowd out the entities created
-            // in the ticks AFTER it (the divergent one has twice landed just past a 120 cap).
+            // Keep the newest records. The old loop started at the oldest retained slot and stopped after
+            // 700 entries, which discarded the newest 324 precisely when a combat-start buff shower filled
+            // the ring. That hid the decisive tick in the third Lex Imperialis palace fork.
             int emitted = 0;
-            for (int i = Math.Max(0, s_uuidRingCount - UuidRingSize); i < s_uuidRingCount && emitted < 700; i++)
+            int first = Math.Max(0, s_uuidRingCount - Math.Min(UuidRingSize, UuidDumpLimit));
+            for (int i = first; i < s_uuidRingCount && emitted < UuidDumpLimit; i++)
             {
                 int slot = i % UuidRingSize;
                 if (s_uuidRingTick[slot] < aroundTick - RngRingSize)

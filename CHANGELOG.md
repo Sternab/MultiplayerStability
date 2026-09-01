@@ -3,6 +3,32 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.6
+
+- Generalized the previously narrow Proving Ground fix to every
+  `ContextActionOnAllUnitsInCombat` target pass. Rogue Trader executes these actions in unsorted
+  `AllBaseUnits` order; exact-parity multiplayer now sorts the fully filtered list by `UniqueId`
+  before random selection or sequential actions. Targets, filters, and action counts are unchanged.
+- Paired v0.9.5 Lex Imperialis palace captures exposed two new buff forks that point back to this
+  primitive:
+  `VC2_Mercenary_FocusOnTarget_Link_Buff` left one companion hash different, and
+  `UndertakerVindictorFlamer_EnemyBuff` advanced `GlobalUuid` a different number of times. The
+  shipped blueprint pack confirms that both DLC families use all-unit combat actions. Post-fix
+  palace validation remains required, and sorting cannot repair unequal target membership.
+- Corrected the `GlobalUuid` evidence dump to emit the newest 700 retained records. Its previous
+  oldest-first cap discarded the decisive tick whenever a dense buff shower filled the 1,024-entry
+  ring; diagnostics remain log-only.
+- Added exact-parity coalescing for concurrent `BundlesLoadService.RequestBundleAsync` calls. The
+  first caller retains Rogue Trader's complete loading path; duplicate requests for the same bundle
+  await that in-flight task instead of replacing its pending `BundleData` and starting a second
+  Unity load.
+- This addresses the three-player v0.9.5 FeudalWorld capture where the host alone received Unity's
+  duplicate-AssetBundle rejection, failed to spawn `FW_Blacksmith`, and omitted the blacksmith's
+  on-spawn cutscene. Both clients matched each other, and every other ambient spawn and cutscene
+  count matched across all three peers.
+- Dark Heresy's newer `BundlesLoadService` independently uses the same per-bundle in-flight task
+  policy. This is source corroboration, not post-fix Rogue Trader field validation.
+
 ## 0.9.5
 
 - Added an ungated vendor construction guard for equipment callbacks received after `VendorVM`
