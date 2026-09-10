@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The current source contains 31 components across 33 C# files.
+The current source contains 32 components across 34 C# files.
 
 ## Working Model
 
@@ -117,6 +117,7 @@ suppress or replace the game's desync dialog.
 | C29 | UI lifecycle guards | `UiLifecycleGuards.cs` | Skips invalid work in five captured Surface HUD, experience, inventory, and vendor-construction UI callback paths. | Paired exception evidence; partial Dark Heresy corroboration; desync effect pending |
 | C30 | Party-pet spawner cleanup | `PartyPetSpawnerFix.cs` | Runs the base spawner cleanup when a disposed party-pet reference no longer resolves, instead of throwing before hashed spawn state is cleared. | Paired exception evidence; post-fix pending |
 | C31 | Async bundle-load coalescing | `BundleLoadRaceFix.cs` | Makes concurrent requests for one AssetBundle await the same in-flight task instead of starting a duplicate Unity load. | Three-player mechanism confirmed; Dark Heresy corroboration; post-fix pending |
+| C32 | Tactician context fix | `TacticianContextFix.cs` | Uses the passive's owning fact when Comfort in Conformity cannot validly trigger through its stored mechanics context. | Paired exception evidence and source-confirmed defect; desync effect pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -191,7 +192,8 @@ consensus protocol and still depends on Photon's reliable event path.
 
 - Combat-exit weather selection can gate hashed Weather draws on a visual profile override.
 - `MomentumThisCombat` is omitted from the Tactician component hash. The first source of its
-  remainder split is not yet proven.
+  remainder split is not yet proven. C32 separately repairs the confirmed invalid Comfort in
+  Conformity heal trigger after the remainder and buff update.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. One peer consumed an
   extra in-tick `GlobalUuid` draw during the second use, but the exact caller was outside the old
   EntityFact-only attribution ring. v0.9.5 records that caller without changing item behavior.
@@ -236,10 +238,11 @@ clues. It does not support a claim that the sequel broadly fixed lockstep desync
 
 ## Testing and Maintenance
 
-v0.9.6 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
+v0.9.7 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
 The party-pet cleanup, all-unit ordering, and async bundle-load coalescing can change hashed state
-and require exact build parity. The bundle and palace-order fixes still require post-fix multiplayer
-sessions in their captured scenarios.
+and require exact build parity. The Tactician context repair is also exact-parity-only. The bundle,
+palace-order, and Tactician fixes still require post-fix multiplayer sessions in their captured
+scenarios.
 
 For field captures:
 

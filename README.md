@@ -4,12 +4,14 @@ Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.6** for game build **1.6.1.514**.
+The current source is **v0.9.7** for game build **1.6.1.514**.
 
-> **Review build:** v0.9.6 coalesces concurrent loads of one AssetBundle and canonicalizes
-> `ContextActionOnAllUnitsInCombat` target order. Paired captures identified these defects during
-> FeudalWorld and Lex Imperialis palace play. Use the same version on every machine and keep save
-> backups.
+> **Review build:** v0.9.7 repairs the invalid mechanics-context trigger used by the Master
+> Tactician talent Comfort in Conformity. Older paired logs recorded this exception for Eogann, and
+> a later report associates his Officer-granted extra turns with repeated desyncs. Rogue Trader
+> isolates subscriber exceptions, and the older exceptions occurred on both peers, so this repairs
+> a confirmed defect without claiming it caused that fork. Post-fix validation is pending. Use the
+> same version on every machine and keep save backups.
 
 ## Features
 
@@ -44,7 +46,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.6.zip` from
+1. Download `MultiplayerStability-0.9.7.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -78,7 +80,7 @@ save checks those identities and the advertised manifest versions, then sends on
 compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
 are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.6 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching v0.9.7 manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
   0.9 clients;
@@ -92,7 +94,9 @@ logs are still required.
 
 ## Known Limitations
 
-- The weather combat-exit path and Tactician momentum remainder are instrumented, not fixed.
+- The weather combat-exit path and Tactician momentum remainder are instrumented, not fixed. The
+  invalid Comfort in Conformity heal trigger is repaired separately, with post-fix field validation
+  pending.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. The second included one
   extra in-tick `GlobalUuid` draw. v0.9.5 records the exact UUID caller but does not alter Medikit
   behavior until that caller is identified.

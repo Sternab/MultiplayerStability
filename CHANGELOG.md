@@ -3,6 +3,24 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.7
+
+- Repaired the invalid rule trigger used by the Master Tactician talent Comfort in Conformity.
+  `TacticalAdvantagePassive` is a global momentum subscriber, but it triggered the heal through a
+  mechanics context that was not necessarily current. The resulting `Fact context differs from
+  current context` exception occurred after the passive had updated its saved momentum remainder
+  and Tactical Advantage buff. Rogue Trader catches exceptions per rulebook subscriber, so later
+  subscribers still ran; the exception prevented this passive's intended heal.
+- Under exact multiplayer parity, valid contexts retain the original trigger. When the context fails
+  the same validation used by `RuleReason`, only that heal call uses the engine's established
+  fact-reason pattern before `Rulebook.Trigger`. Tactician arithmetic, buffs, heal amount, target,
+  and conditions are unchanged; solo and incompatible sessions remain vanilla.
+- Paired v0.8.23 logs recorded the exception repeatedly for Eogann before an isolated Eogann entity
+  fork. A later report associates Eogann with desyncs after Officer-granted extra turns. Those older
+  exceptions occurred on both peers, so they do not prove the cause of that fork. Context validity
+  could still differ on another event, but the fix's effect on the reported desync remains a
+  post-fix field question. The existing Tactician remainder diagnostic remains active.
+
 ## 0.9.6
 
 - Generalized the previously narrow Proving Ground fix to every
