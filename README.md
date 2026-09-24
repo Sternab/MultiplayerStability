@@ -4,14 +4,14 @@ Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.7** for game build **1.6.1.514**.
+The current source is **v0.9.8** for game build **1.6.1.514**.
 
-> **Review build:** v0.9.7 repairs the invalid mechanics-context trigger used by the Master
-> Tactician talent Comfort in Conformity. Older paired logs recorded this exception for Eogann, and
-> a later report associates his Officer-granted extra turns with repeated desyncs. Rogue Trader
-> isolates subscriber exceptions, and the older exceptions occurred on both peers, so this repairs
-> a confirmed defect without claiming it caused that fork. Post-fix validation is pending. Use the
-> same version on every machine and keep save backups.
+> **Review build:** paired three-player v0.9.7 logs recorded one Officer-granted turn where the host
+> replaced the Cyber Eagle's Proving Ground bonus 16 times and both clients replaced it 15 times.
+> The host consumed 11 extra `GlobalUuid` draws before the first entity hash mismatch. v0.9.8 limits
+> that exact marker to its current owner when that owner receives the extra turn, and rejects stale
+> marker callbacks. Other extra-turn effects remain unchanged. Post-fix validation is pending. Use
+> the same version on every machine and keep save backups.
 
 ## Features
 
@@ -46,7 +46,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.7.zip` from
+1. Download `MultiplayerStability-0.9.8.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -80,7 +80,7 @@ save checks those identities and the advertised manifest versions, then sends on
 compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
 are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.7 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching v0.9.8 manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
   0.9 clients;
@@ -100,8 +100,8 @@ logs are still required.
 - Two consecutive Medikit uses preceded forks in the paired v0.9.2 capture. The second included one
   extra in-tick `GlobalUuid` draw. v0.9.5 records the exact UUID caller but does not alter Medikit
   behavior until that caller is identified.
-- The achievement-reward and generalized all-unit combat-order fixes need post-fix field
-  validation. Sorting cannot repair peers that disagree about target membership.
+- The achievement-reward, generalized all-unit combat-order, and Proving Ground extra-turn fixes
+  need post-fix field validation. Sorting cannot repair peers that disagree about target membership.
 - Dash delivery removes view-position timing from target delivery, but local movement completion can
   still select a different tick.
 - Sorting range-query results cannot repair different physics candidate membership.

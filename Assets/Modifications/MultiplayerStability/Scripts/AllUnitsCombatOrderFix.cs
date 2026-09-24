@@ -12,7 +12,10 @@
 // two more buff forks that point back to this primitive. VC2_Mercenary_FocusOnTarget_Link_Buff ended
 // with a different recipient hash, while UndertakerVindictorFlamer_EnemyBuff advanced GlobalUuid a
 // different number of times. The shipped blueprint pack places both DLC buff families under
-// ContextActionOnAllUnitsInCombat; post-fix palace validation is still required.
+// ContextActionOnAllUnitsInCombat; post-fix palace validation is still required. A later v0.9.7
+// capture showed 16 Proving Ground bonus replacements on the host and 15 on both clients. That is
+// a marker-count or subscriber-lifecycle mismatch, not an ordering mismatch; the content-specific
+// owner-local correction lives in ProvingGroundExtraTurnFix.cs.
 //
 // Fix: sort every fully filtered target list with the engine's own UniqueId comparer before random
 // selection or sequential execution. The member set, filters, actions, and number of iterations are

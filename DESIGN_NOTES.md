@@ -9,7 +9,7 @@ network model and does not claim to be an engine-level solution.
 Owlcat has access to the complete source, build pipeline, telemetry, and test environment. This
 project is useful as a set of reproduced defects, narrow mitigations, diagnostics, and test cases.
 
-The current source contains 32 components across 34 C# files.
+The current source contains 33 components across 35 C# files.
 
 ## Working Model
 
@@ -118,6 +118,7 @@ suppress or replace the game's desync dialog.
 | C30 | Party-pet spawner cleanup | `PartyPetSpawnerFix.cs` | Runs the base spawner cleanup when a disposed party-pet reference no longer resolves, instead of throwing before hashed spawn state is cleared. | Paired exception evidence; post-fix pending |
 | C31 | Async bundle-load coalescing | `BundleLoadRaceFix.cs` | Makes concurrent requests for one AssetBundle await the same in-flight task instead of starting a duplicate Unity load. | Three-player mechanism confirmed; Dark Heresy corroboration; post-fix pending |
 | C32 | Tactician context fix | `TacticianContextFix.cs` | Uses the passive's owning fact when Comfort in Conformity cannot validly trigger through its stored mechanics context. | Paired exception evidence and source-confirmed defect; desync effect pending |
+| C33 | Proving Ground extra-turn fix | `ProvingGroundExtraTurnFix.cs` | Lets only the granted unit's current Cyber Eagle marker apply the replace-stacking bonus and rejects stale marker callbacks. | Paired three-player v0.9.7 count and UUID evidence; post-fix pending |
 
 Each source header documents its Harmony target, reason for patching, activation gate, and failure
 behavior. The table is an index, not a substitute for the implementation.
@@ -183,6 +184,8 @@ consensus protocol and still depends on Photon's reliable event path.
 - Every `ContextActionOnAllUnitsInCombat` pass executes its fully filtered targets in UniqueId
   order. The same targets and actions remain; only their order becomes stable. This includes the
   Cyber Eagle's Proving Ground markers and the captured Lex Imperialis DLC buff families.
+- The Cyber Eagle's Proving Ground extra-turn effect executes from the granted unit's current
+  marker only. Redundant marker callbacks no longer replace the same final bonus repeatedly.
 - Concurrent async requests for one AssetBundle share the first request while it is in flight. The
   first caller still executes Rogue Trader's complete loading and dependency path.
 
@@ -232,17 +235,18 @@ intent or final Dark Heresy behavior.
 | Dialogue answers | `DialogAnswerGameCommand` retains the same `CuePlayScheduled` and cue-tick early returns. | No upstream resolution observed; supports C28's target, not its policy |
 | UI lifecycle | The newer Surface HUD handles null selection without the Hunt-the-Prey lookup, the experience display checks null/disposed state, and the PC additional-stats view removes the unsafe unit subscription. | Independent support for C29's narrow invalid-lifecycle guards; not proof that the captured exceptions caused a desync |
 | Async bundle loading | Concurrent requests for one bundle await a shared task through `m_LoadingBundles`. | Direct architectural corroboration for C31 and the captured Rogue Trader race |
+| Extra-turn triggers | Owner restrictions and source-and-target restrictions are separate, and action caster and target are explicit. | Supports the ambiguity diagnosis behind C33; it is not a direct backport policy |
 
 The comparison gives direct corroboration for the charge cache change and several maintenance
 clues. It does not support a claim that the sequel broadly fixed lockstep desynchronization.
 
 ## Testing and Maintenance
 
-v0.9.7 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
+v0.9.8 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
 The party-pet cleanup, all-unit ordering, and async bundle-load coalescing can change hashed state
-and require exact build parity. The Tactician context repair is also exact-parity-only. The bundle,
-palace-order, and Tactician fixes still require post-fix multiplayer sessions in their captured
-scenarios.
+and require exact build parity. The Tactician context and Proving Ground extra-turn repairs are also
+exact-parity-only. The bundle, palace-order, Tactician, and Proving Ground fixes still require
+post-fix multiplayer sessions in their captured scenarios.
 
 For field captures:
 

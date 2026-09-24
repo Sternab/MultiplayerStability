@@ -3,6 +3,20 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 0.9.8
+
+- Added an exact-parity correction for the Cyber Eagle's Proving Ground extra-turn marker. Paired
+  three-player v0.9.7 logs recorded the host replacing the final bonus 16 times while both clients
+  replaced it 15 times for the same Officer-granted Abelard turn. The host consumed 11 extra
+  `GlobalUuid` draws and entity hashes diverged immediately afterward.
+- Only the current Proving Ground marker owned by the granted-turn unit may now execute. Detached,
+  disposed, and stale marker callbacks are rejected. The final replace-stacking bonus remains the
+  same, while redundant remove-and-recreate cycles and their UUID allocation are removed.
+- The patch is limited to `EaglePet_ProvingGround_Ally_Marker_Buff`. Other extra-turn triggers,
+  solo play, and incompatible sessions remain vanilla. Post-fix multiplayer validation is pending.
+- The earlier all-unit ordering fix remains useful for equal marker membership, but cannot repair
+  the 16-versus-15 subscriber-count mismatch exposed by this capture.
+
 ## 0.9.7
 
 - Repaired the invalid rule trigger used by the Master Tactician talent Comfort in Conformity.
