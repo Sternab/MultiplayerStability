@@ -54,20 +54,38 @@ If Multiplayer Stability is not yet in its catalog:
 
 ### Manual
 
-1. Download the release ZIP.
+1. Close the game and download the release ZIP.
 2. Create:
    `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader\Modifications\MultiplayerStability`
 3. Extract the ZIP contents into that folder.
 4. Confirm this file exists:
    `...\MultiplayerStability\OwlcatModificationManifest.json`
-5. Enable the mod in game and restart when prompted.
+5. Open this file in a text editor:
+   `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader\OwlcatModificationManagerSettings.json`
+6. Add `"MultiplayerStability"` to the `EnabledModifications` array. Keep any existing mod names
+   and other settings; separate names with commas. If this is your only enabled mod, the entry is
+   `"EnabledModifications": ["MultiplayerStability"]`.
+7. Save the file, launch the game, and confirm the startup line in
+   [Multiplayer Check](#multiplayer-check) below. Repeat these steps on every player's machine.
+
+If the settings file does not exist, create it with the following contents. Make sure its filename
+ends in `.json`, not `.json.txt`:
+
+```json
+{
+  "EnabledModifications": ["MultiplayerStability"]
+}
+```
+
+Extracting the files alone does not enable the mod. Without the settings entry, it may not appear
+on the in-game Mods page or load its patches.
 
 Do not extract directly into `Modifications`, and avoid a doubled
 `MultiplayerStability\MultiplayerStability` folder.
 
 ## Multiplayer Check
 
-At startup, search `GameLogFull.txt` for:
+At startup, search `GameLogFull.txt` (see [log location](#troubleshooting-and-reports)) for:
 
 `[MPStability] [Init] Patches applied (`
 
@@ -118,18 +136,31 @@ logs are still required.
 
 Implementation status and evidence are listed in [DESIGN_NOTES.md](DESIGN_NOTES.md).
 
-## Troubleshooting
+## Troubleshooting and Reports
 
-`GameLogFull.txt` is stored in:
+The full game log is:
+
+```text
+%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader\GameLogFull.txt
+```
+
+To find it, press **Win+R**, paste the folder path below, and press Enter:
 
 `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Warhammer 40000 Rogue Trader`
 
-When reporting a desync:
+Report problems through [GitHub Issues](https://github.com/Sternab/MultiplayerStability/issues).
+For desyncs, freezes, or transfer failures:
 
-1. Collect `GameLogFull.txt` from every peer.
-2. Record the action immediately before the first desync dialog.
-3. Include the installed manifest version and startup patch result from every machine.
+1. Keep a copy of `GameLogFull.txt` from **every player, including the host**, before launching the
+   game again. Collect logs from the same session and label them by player or host/client role.
+2. Describe what happened, the area and action involved, and the approximate time. For a desync,
+   record the action immediately before the first dialog.
+3. Include the game version, installed mod versions, and startup patch result from every machine.
+   ZIP the logs if they are large.
 4. Keep the full logs private until account identifiers have been removed.
+
+Logs from long sessions without desyncs are useful too: they show whether fixes were exercised
+without errors.
 
 After a Rogue Trader update, treat the mod as unverified until its Harmony targets and reflected
 members have been reviewed against the new build.
