@@ -31,9 +31,8 @@ This model explains the defects listed below. It is not a claim that every desyn
 
 ### Shared compatibility decision
 
-Lobby mod properties are local observations, not a consensus protocol. The v0.9 series therefore
-makes one
-save-sender decision at each save-transfer epoch:
+Lobby mod properties are local observations, not a consensus protocol. Since v0.9.0, the mod makes
+one save-sender decision at each save-transfer epoch:
 
 1. Every peer reads the Photon mod properties and exchanges its compiled assembly MVID with every
    other peer.
@@ -45,9 +44,9 @@ save-sender decision at each save-transfer epoch:
    before enabling simulation fixes or custom protocols.
 
 Pending decisions are keyed by actor because vanilla permits non-owners to start a save and resolves
-simultaneous starts by actor number. An incompatible decision disables those behaviors on 0.9 peers.
-If the save sender cannot queue the
-decision, it aborts the start attempt. If a client sees the mod on another peer but receives no
+simultaneous starts by actor number. An incompatible decision disables those behaviors on peers
+running v0.9.0 or later. If the save sender cannot queue the decision, it aborts the start attempt.
+If a client sees the mod on another peer but receives no
 valid decision, it refuses the load. This avoids entering play with different policies.
 
 Pre-0.9 builds do not understand the decision frame. Mixed sessions containing those builds remain
@@ -242,8 +241,17 @@ clues. It does not support a claim that the sequel broadly fixed lockstep desync
 
 ## Testing and Maintenance
 
-v0.9.8 targets the Rogue Trader `1.6.1.514` reference set. The UI lifecycle guards are subset-safe.
-The party-pet cleanup, all-unit ordering, and async bundle-load coalescing can change hashed state
+v1.0.0 targets the Rogue Trader `1.6.1.514` reference set and promotes the unchanged v0.9.8 runtime.
+The release ZIP retains the DLL and content bytes from v0.9.8 with only the external manifest
+version updated. There was no recompile or new gameplay change for this promotion.
+
+On 2026-10-09, the project owner reported that another tester had completed the full campaign
+without a desync. This supports the stable-release decision, but the report did not include a build
+number or paired logs. It does not establish that each previously failing scenario was exercised;
+the component evidence labels above are unchanged.
+
+The UI lifecycle guards are subset-safe. The party-pet cleanup, all-unit ordering, and async
+bundle-load coalescing can change hashed state
 and require exact build parity. The Tactician context and Proving Ground extra-turn repairs are also
 exact-parity-only. The bundle, palace-order, Tactician, and Proving Ground fixes still require
 post-fix multiplayer sessions in their captured scenarios.

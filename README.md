@@ -1,17 +1,15 @@
 # Multiplayer Stability
 
-Multiplayer Stability is an experimental co-op mod for **Warhammer 40,000: Rogue Trader**. It
+Multiplayer Stability is a co-op mod for **Warhammer 40,000: Rogue Trader**. It
 contains targeted fixes for reproduced desynchronization paths, diagnostics for unresolved cases,
 and faster save transfer between players.
 
-The current source is **v0.9.8** for game build **1.6.1.514**.
+The current release is **v1.0.0** for game build **1.6.1.514**.
 
-> **Review build:** paired three-player v0.9.7 logs recorded one Officer-granted turn where the host
-> replaced the Cyber Eagle's Proving Ground bonus 16 times and both clients replaced it 15 times.
-> The host consumed 11 extra `GlobalUuid` draws before the first entity hash mismatch. v0.9.8 limits
-> that exact marker to its current owner when that owner receives the extra turn, and rejects stale
-> marker callbacks. Other extra-turn effects remain unchanged. Post-fix validation is pending. Use
-> the same version on every machine and keep save backups.
+1.0 is the first stable release, following extended community testing and a tester-reported full
+campaign without a desync. It retains the runtime code and content from 0.9.8, with no new gameplay
+changes. Known limitations remain documented below. Use the same release on every machine and keep
+save backups.
 
 ## Features
 
@@ -46,7 +44,7 @@ dependencies.
 [ModFinder](https://www.nexusmods.com/warhammer40kroguetrader/mods/146) is the recommended installer.
 If Multiplayer Stability is not yet in its catalog:
 
-1. Download `MultiplayerStability-0.9.8.zip` from
+1. Download `MultiplayerStability-1.0.0.zip` from
    [GitHub Releases](https://github.com/Sternab/MultiplayerStability/releases).
 2. Drag the unchanged ZIP onto ModFinder's **Drag zips here to install** area.
 3. Confirm that Multiplayer Stability is installed and enabled on every machine.
@@ -98,10 +96,10 @@ save checks those identities and the advertised manifest versions, then sends on
 compatibility decision directly to each other peer before the game's `LoadSave` message. Decisions
 are keyed by sender so vanilla's non-owner and simultaneous save-start behavior remains available:
 
-- matching v0.9.8 manifest versions and compiled module IDs enable simulation fixes and custom
+- matching manifest versions and compiled module IDs enable simulation fixes and custom
   protocols;
 - a missing or different build selects vanilla simulation and transfer behavior for compatible
-  0.9 clients;
+  clients that support this protocol (0.9.0 and later);
 - if a peer advertises Multiplayer Stability but the save-sender decision is missing or invalid, the
   client refuses the load rather than enter play with a different policy.
 
@@ -185,7 +183,12 @@ the next session. Existing saves then use vanilla multiplayer behavior.
    Owlcat build excludes the text placeholder, and an empty ZIP directory may be discarded by an
    installer.
 7. Verify the packaged manifest version, DLL timestamp, and non-empty `Blueprints` folder before
-   distribution.
+   distribution. Timestamps alone do not identify a release; compare file hashes when checking an
+   existing package.
+
+The published 1.0.0 package reuses the 0.9.8 DLL and content byte-for-byte; only its external manifest
+version changed. Its DLL therefore retains the original build timestamp. Future code changes still
+require a fresh Unity build.
 
 The template generates `Generated`; it is intentionally not tracked. No Python tooling is required.
 

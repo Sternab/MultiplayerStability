@@ -3,6 +3,17 @@
 This file records public milestones. Point releases that only corrected builds, diagnostics, or
 documentation are grouped with the behavior they support.
 
+## 1.0.0
+
+- First stable release, following extended community testing and a tester-reported full campaign
+  without a desync. This is a release milestone, not a claim that every possible desync is fixed.
+- Promotes the 0.9.8 runtime unchanged. The release ZIP retains the same DLL and content bytes;
+  only the external manifest version changes. No new gameplay, networking, or diagnostic changes.
+- Updated the README for the stable release, including the manual activation steps and log-reporting
+  instructions added since 0.9.8. Existing limitations and per-fix evidence labels remain in place.
+- Update every player's installation to 1.0.0 together. The compatibility check still requires
+  matching manifest versions and compiled module IDs, even though the runtime is unchanged.
+
 ## 0.9.8
 
 - Added an exact-parity correction for the Cyber Eagle's Proving Ground extra-turn marker. Paired
